@@ -213,17 +213,20 @@ void TunnelWorker::run_connected() {
     pfds.push_back(pollfd{stop_pipe_[0], POLLIN, 0});
     pfds.push_back(pollfd{listener_fd_, POLLIN, 0});
 
-    bool sess_want_write = ping_opening;
+    // Session socket: always wait for incoming packets/confirmations; add
+    // POLLOUT only when libssh actually has bytes to flush (out_buffer) or we
+    // have queued app data (to_remote). Use ssh_get_status() (buffer state),
+    // not ssh_get_poll_flags() (stale event registration under our own poll()).
+    short sess_ev = POLLIN;
+    if (ssh_get_status(session_) & SSH_WRITE_PENDING) {
+      sess_ev |= POLLOUT;
+    }
     for (auto& f : forwards) {
       short ev = POLLIN;
       if (!f.to_local.empty()) ev |= POLLOUT;
-      if (f.state == Forwarder::State::Opening || !f.to_remote.empty()) {
-        sess_want_write = true;
-      }
+      if (!f.to_remote.empty()) sess_ev |= POLLOUT;
       pfds.push_back(pollfd{f.fd, ev, 0});
     }
-    short sess_ev = POLLIN;
-    if (sess_want_write) sess_ev |= POLLOUT;
     pfds.push_back(pollfd{session_fd, sess_ev, 0});
     const std::size_t sess_i = pfds.size() - 1;
 
@@ -344,6 +347,22 @@ void TunnelWorker::run_connected() {
                 f.target_port = r.port;
                 f.ch = ssh_channel_new(session_);
                 f.state = Forwarder::State::Opening;
+                // Initiate the open immediately (step 1 already ran for this
+                // forwarder this iteration) so the request goes out without
+                // waiting a full poll cycle.
+                if (f.ch) {
+                  const int o = ssh_channel_open_forward(
+                      f.ch, f.target_host.c_str(), f.target_port, "127.0.0.1",
+                      settings_.local_port);
+                  if (o == SSH_OK) {
+                    f.to_local += success_reply();
+                    f.state = Forwarder::State::Stream;
+                  } else if (o == SSH_ERROR) {
+                    f.to_local += fail_reply();
+                    f.dead = true;
+                  }
+                  // SSH_AGAIN: request in flight; step 1 retries next time.
+                }
                 break;
               }
             }
@@ -388,38 +407,63 @@ void TunnelWorker::run_connected() {
     // Ping probe (measures tunnel RTT to ping_host via direct-tcpip).
     const auto now2 = clock::now();
     if (settings_.ping_interval_sec > 0) {
-      if (!ping_opening) {
+      if (ping_ch == nullptr) {
+        // No ping in flight: start one when due.
         if (now2 >= ping_next) {
           ping_next = now2 + seconds(settings_.ping_interval_sec);
-          if (ping_ch) ssh_channel_free(ping_ch);
           ping_ch = ssh_channel_new(session_);
           if (ping_ch) {
             ping_opening = true;
             ping_start = now2;
+            // Initiate the open immediately so the request goes out without
+            // waiting a full poll cycle.
+            const int o = ssh_channel_open_forward(
+                ping_ch, settings_.ping_host.c_str(), settings_.ping_port,
+                "127.0.0.1", settings_.local_port);
+            if (o == SSH_OK) {
+              ping_ms_ =
+                  duration<double, std::milli>(now2 - ping_start).count();
+              ssh_channel_close(ping_ch);
+              ping_opening = false;
+            } else if (o == SSH_ERROR) {
+              ping_ms_ = -1.0;
+              ssh_channel_free(ping_ch);
+              ping_ch = nullptr;
+            }
+            // SSH_AGAIN: keep opening.
           }
         }
-      } else if (ping_ch) {
-        const int o = ssh_channel_open_forward(ping_ch, settings_.ping_host.c_str(),
-                                               settings_.ping_port, "127.0.0.1",
-                                               settings_.local_port);
-        if (o == SSH_OK) {
+      } else if (ping_opening) {
+        const int o = ssh_channel_open_forward(
+            ping_ch, settings_.ping_host.c_str(), settings_.ping_port,
+            "127.0.0.1", settings_.local_port);
+        if (o == SSH_AGAIN) {
+          if (duration_cast<milliseconds>(now2 - ping_start).count() >
+              ping_timeout_ms) {
+            ping_ms_ = -1.0;
+            ssh_channel_free(ping_ch);
+            ping_ch = nullptr;
+            ping_opening = false;
+          }
+        } else if (o == SSH_OK) {
           ping_ms_ = duration<double, std::milli>(now2 - ping_start).count();
-          ssh_channel_free(ping_ch);
-          ping_ch = nullptr;
+          ssh_channel_close(ping_ch);
           ping_opening = false;
-        } else if (o == SSH_ERROR) {
-          ping_ms_ = -1.0;
-          ssh_channel_free(ping_ch);
-          ping_ch = nullptr;
-          ping_opening = false;
-        } else if (duration_cast<milliseconds>(now2 - ping_start).count() > ping_timeout_ms) {
+        } else {  // SSH_ERROR
           ping_ms_ = -1.0;
           ssh_channel_free(ping_ch);
           ping_ch = nullptr;
           ping_opening = false;
         }
       } else {
-        ping_opening = false;
+        // Ping measured; drain the close handshake so the server's close
+        // confirmation doesn't keep the socket readable (busy-spinning the
+        // loop while idle), then free the channel.
+        const int pr = ssh_channel_poll(ping_ch, 0);
+        if (pr == SSH_EOF || pr == SSH_ERROR) {
+          ssh_channel_free(ping_ch);
+          ping_ch = nullptr;
+        }
       }
     }
 
