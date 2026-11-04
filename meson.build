@@ -26,6 +26,7 @@ sources = files(
   'src/window.cpp',
   'src/model.cpp',
   'src/secret_store.cpp',
+  'src/server_checker.cpp',
   'src/ssh_tunnel.cpp',
   'src/socks5.cpp',
   'src/tunnel_controller.cpp',

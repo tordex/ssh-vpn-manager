@@ -196,6 +196,14 @@ public:
     port_->set_increments(1, 10);
     port_->set_value(existing ? existing->port : 22);
 
+    ping_host_ = Gtk::make_managed<Gtk::Entry>();
+    ping_host_->set_text(existing ? existing->ping_host : "1.1.1.1");
+
+    ping_port_ = Gtk::make_managed<Gtk::SpinButton>();
+    ping_port_->set_range(1, 65535);
+    ping_port_->set_increments(1, 10);
+    ping_port_->set_value(existing ? existing->ping_port : 80);
+
     auto* show_pw = Gtk::make_managed<Gtk::CheckButton>("Show password");
     show_pw->signal_toggled().connect([this, show_pw] {
       password_->set_visibility(show_pw->get_active());
@@ -212,7 +220,9 @@ public:
     grid_row(*grid, 2, "Port", *port_);
     grid_row(*grid, 3, "Login", *login_);
     grid_row(*grid, 4, "Password", *password_);
-    grid->attach(*show_pw, 1, 5, 1, 1);
+    grid_row(*grid, 5, "Ping host", *ping_host_);
+    grid_row(*grid, 6, "Ping port", *ping_port_);
+    grid->attach(*show_pw, 1, 7, 1, 1);
     box->append(*grid);
 
     error_ = make_error_label();
@@ -250,6 +260,8 @@ private:
     s.host = host;
     s.port = port_->get_value_as_int();
     s.login = login;
+    s.ping_host = ping_host_->get_text();
+    s.ping_port = ping_port_->get_value_as_int();
 
     signal_saved.emit(std::move(s), pw, !pw.empty());
     close();
@@ -260,6 +272,8 @@ private:
   Gtk::Entry* login_;
   Gtk::Entry* password_;
   Gtk::SpinButton* port_;
+  Gtk::Entry* ping_host_;
+  Gtk::SpinButton* ping_port_;
   Gtk::Label* error_;
   std::string id_;
 };
@@ -399,7 +413,8 @@ private:
 
 Window::Window(Model& model, SecretStore& secrets, TunnelController& controller,
                Log& log)
-    : model_(model), secrets_(secrets), controller_(controller), log_(log) {
+    : model_(model), secrets_(secrets), controller_(controller), log_(log),
+      server_checker_(model, secrets) {
   build_ui();
   rebuild_tunnels();
   rebuild_servers();
@@ -408,6 +423,16 @@ Window::Window(Model& model, SecretStore& secrets, TunnelController& controller,
   controller_.signal_changed.connect(
       [this](const std::string& id) { refresh_tunnel_row(id); });
   log_.signal_changed.connect([this] { refresh_log(); });
+  server_checker_.signal_changed.connect([this](const std::string& id) {
+    refresh_server_row(id);
+    log_server_result(id);
+  });
+  server_checker_.signal_finished.connect(
+      [this] {
+        if (check_btn_) {
+          check_btn_->set_sensitive(true);
+        }
+      });
 }
 
 Window::~Window() = default;
@@ -427,6 +452,10 @@ void Window::build_ui() {
   add_server->signal_clicked().connect([this] { on_add_server(); });
   hb->pack_start(*add_server);
 
+  check_btn_ = make_icon_button("Check servers", "view-refresh-symbolic");
+  check_btn_->signal_clicked().connect([this] { on_check_servers(); });
+  hb->pack_start(*check_btn_);
+
   auto* quit = Gtk::make_managed<Gtk::Button>("Quit");
   quit->signal_clicked().connect([this] {
     if (auto app = std::dynamic_pointer_cast<App>(get_application())) {
@@ -442,6 +471,7 @@ void Window::build_ui() {
   set_hide_on_close(true);
 
   auto* notebook = Gtk::make_managed<Gtk::Notebook>();
+  notebook_ = notebook;
 
   // --- Tunnels tab ---
   auto* tunnels_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
@@ -482,6 +512,8 @@ void Window::build_ui() {
   shead->append(*make_cell("Name", 180, 0.0f, false));
   shead->append(*make_cell("Address", 220, 0.0f, false));
   shead->append(*make_cell("Login", 120, 0.0f, false));
+  shead->append(*make_cell("Status", 140, 0.0f, true));
+  shead->append(*make_cell("Ping", 70, 1.0f, false));
   servers_box->append(*shead);
 
   server_list_ = Gtk::make_managed<Gtk::ListBox>();
@@ -493,7 +525,7 @@ void Window::build_ui() {
   servers_box->append(*sscroll);
 
   auto* stab = Gtk::make_managed<Gtk::Label>("Servers");
-  notebook->append_page(*servers_box, *stab);
+  servers_page_ = notebook->append_page(*servers_box, *stab);
 
   // --- Log tab ---
   auto* log_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
@@ -596,6 +628,7 @@ void Window::rebuild_tunnels() {
 
 void Window::rebuild_servers() {
   server_list_->remove_all();
+  server_rows_.clear();
 
   for (const Server* sp : sorted_servers(model_)) {
     const Server& s = *sp;
@@ -609,6 +642,14 @@ void Window::rebuild_servers() {
     auto* addr = make_cell(s.host + ":" + std::to_string(s.port), 220, 0.0f, true);
     auto* login = make_cell(s.login, 120, 0.0f, true);
 
+    ServerRowWidgets sw;
+    sw.status = make_cell("", 140, 0.0f, true);
+    sw.ping = make_cell("", 70, 1.0f, false);
+
+    auto* check = Gtk::make_managed<Gtk::Button>();
+    check->set_icon_name("view-refresh-symbolic");
+    check->set_tooltip_text("Check");
+
     auto* edit = Gtk::make_managed<Gtk::Button>();
     edit->set_icon_name("document-edit-symbolic");
     edit->set_tooltip_text("Edit");
@@ -621,14 +662,24 @@ void Window::rebuild_servers() {
     row->append(*name);
     row->append(*addr);
     row->append(*login);
+    row->append(*sw.status);
+    row->append(*sw.ping);
+    row->append(*check);
     row->append(*edit);
     row->append(*del);
 
     const std::string id = s.id;
+    check->signal_clicked().connect([this, id] { on_check_server(id); });
     edit->signal_clicked().connect([this, id] { on_edit_server(id); });
     del->signal_clicked().connect([this, id] { on_delete_server(id); });
 
     server_list_->append(*row);
+    server_rows_[id] = sw;
+  }
+
+  for (const auto& [id, rw] : server_rows_) {
+    (void)rw;
+    refresh_server_row(id);
   }
 }
 
@@ -657,6 +708,34 @@ void Window::refresh_tunnel_row(const std::string& id) {
   it->second.toggle->set_icon_name(running ? "media-playback-stop-symbolic"
                                            : "media-playback-start-symbolic");
   it->second.toggle->set_tooltip_text(running ? "Stop" : "Run");
+}
+
+void Window::refresh_server_row(const std::string& id) {
+  auto it = server_rows_.find(id);
+  if (it == server_rows_.end()) return;
+
+  const ServerCheckResult r = server_checker_.result(id);
+  if (r.checking) {
+    it->second.status->set_markup("<span color='#3584e4'>Checking</span>");
+    it->second.status->set_tooltip_text("");
+    it->second.ping->set_text("—");
+    return;
+  }
+  if (!r.checked) {
+    it->second.status->set_text("—");
+    it->second.status->set_tooltip_text("");
+    it->second.ping->set_text("—");
+    return;
+  }
+  if (r.ok) {
+    it->second.status->set_markup("<span color='#26a269'>OK</span>");
+    it->second.status->set_tooltip_text("");
+    it->second.ping->set_text(ping_text(r.ping_ms));
+  } else {
+    it->second.status->set_markup("<span color='#c01c28'>Error</span>");
+    it->second.status->set_tooltip_text(r.error);
+    it->second.ping->set_text("—");
+  }
 }
 
 void Window::refresh_log() {
@@ -729,6 +808,35 @@ void Window::on_delete_server(const std::string& id) {
   model_.save();
   rebuild_servers();
   rebuild_tunnels();
+}
+
+void Window::on_check_servers() {
+  if (notebook_) notebook_->set_current_page(servers_page_);
+  if (server_checker_.busy()) return;
+  if (check_btn_) check_btn_->set_sensitive(false);
+  server_checker_.check_all();
+}
+
+void Window::on_check_server(const std::string& id) {
+  if (server_checker_.busy()) return;
+  server_checker_.check_one(id);
+}
+
+void Window::log_server_result(const std::string& id) {
+  const ServerCheckResult r = server_checker_.result(id);
+  if (!r.checked) return;
+
+  const Server* s = model_.find_server(id);
+  const std::string name = s ? s->name : id;
+  if (r.ok) {
+    std::string msg = "Server " + name + ": OK";
+    if (r.ping_ms >= 0.0) {
+      msg += " (" + ping_text(r.ping_ms) + ")";
+    }
+    log_.append(msg);
+  } else {
+    log_.append("Server " + name + ": " + r.error);
+  }
 }
 
 void Window::on_add_tunnel() {

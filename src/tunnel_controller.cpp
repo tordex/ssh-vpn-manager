@@ -26,6 +26,19 @@ std::string TunnelController::start(const std::string& tunnel_id) {
     return "tunnel not found";
   }
 
+  // Stop any other running tunnel on the same local port so this one can bind it.
+  std::vector<std::string> to_stop;
+  for (const auto& [id, entry] : entries_) {
+    (void)entry;
+    const Tunnel* other = model_.find_tunnel(id);
+    if (other && other->local_port == t->local_port) {
+      to_stop.push_back(id);
+    }
+  }
+  for (const auto& id : to_stop) {
+    stop(id);
+  }
+
   const std::string port_text =
       "Tunnel 127.0.0.1:" + std::to_string(t->local_port);
 

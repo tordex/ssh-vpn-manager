@@ -12,6 +12,8 @@ struct Server {
   std::string host;
   int port = 22;
   std::string login;
+  std::string ping_host = "1.1.1.1";
+  int ping_port = 80;
 };
 
 // A local SOCKS5 dynamic-forward tunnel bound to 127.0.0.1:local_port and routed

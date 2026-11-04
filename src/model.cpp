@@ -46,6 +46,8 @@ bool Model::load(std::string* error) {
         sv.host = s.value("host", "");
         sv.port = s.value("port", 22);
         sv.login = s.value("login", "");
+        sv.ping_host = s.value("ping_host", "1.1.1.1");
+        sv.ping_port = s.value("ping_port", 80);
         if (!sv.id.empty()) {
           servers.push_back(std::move(sv));
         }
@@ -85,7 +87,9 @@ bool Model::save(std::string* error) const {
                             {"name", s.name},
                             {"host", s.host},
                             {"port", s.port},
-                            {"login", s.login}});
+                            {"login", s.login},
+                            {"ping_host", s.ping_host},
+                            {"ping_port", s.ping_port}});
   }
   j["tunnels"] = json::array();
   for (const auto& t : tunnels) {
