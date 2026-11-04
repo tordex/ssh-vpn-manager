@@ -509,10 +509,19 @@ void Window::rebuild_tunnels() {
     row->append(*rw.tx);
     row->append(*rw.rx);
 
-    rw.toggle = Gtk::make_managed<Gtk::Button>("Run");
-    auto* edit = Gtk::make_managed<Gtk::Button>("Edit");
-    auto* del = Gtk::make_managed<Gtk::Button>("Delete");
+    rw.toggle = Gtk::make_managed<Gtk::Button>();
+    rw.toggle->set_icon_name("media-playback-start-symbolic");
+    rw.toggle->set_tooltip_text("Run");
+
+    auto* edit = Gtk::make_managed<Gtk::Button>();
+    edit->set_icon_name("document-edit-symbolic");
+    edit->set_tooltip_text("Edit");
+
+    auto* del = Gtk::make_managed<Gtk::Button>();
+    del->set_icon_name("edit-delete-symbolic");
+    del->set_tooltip_text("Delete");
     del->add_css_class("destructive-action");
+
     row->append(*rw.toggle);
     row->append(*edit);
     row->append(*del);
@@ -546,8 +555,13 @@ void Window::rebuild_servers() {
     auto* addr = make_cell(s.host + ":" + std::to_string(s.port), 220, 0.0f, true);
     auto* login = make_cell(s.login, 120, 0.0f, true);
 
-    auto* edit = Gtk::make_managed<Gtk::Button>("Edit");
-    auto* del = Gtk::make_managed<Gtk::Button>("Delete");
+    auto* edit = Gtk::make_managed<Gtk::Button>();
+    edit->set_icon_name("document-edit-symbolic");
+    edit->set_tooltip_text("Edit");
+
+    auto* del = Gtk::make_managed<Gtk::Button>();
+    del->set_icon_name("edit-delete-symbolic");
+    del->set_tooltip_text("Delete");
     del->add_css_class("destructive-action");
 
     row->append(*name);
@@ -585,7 +599,10 @@ void Window::refresh_tunnel_row(const std::string& id) {
   it->second.ping->set_text(ping_text(st.ping_ms));
   it->second.tx->set_text(format_bytes(st.tx_bytes));
   it->second.rx->set_text(format_bytes(st.rx_bytes));
-  it->second.toggle->set_label(controller_.is_running(id) ? "Stop" : "Run");
+  const bool running = controller_.is_running(id);
+  it->second.toggle->set_icon_name(running ? "media-playback-stop-symbolic"
+                                           : "media-playback-start-symbolic");
+  it->second.toggle->set_tooltip_text(running ? "Stop" : "Run");
 }
 
 void Window::refresh_log() {
