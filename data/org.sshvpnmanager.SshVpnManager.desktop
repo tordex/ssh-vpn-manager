@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=SSH VPN Manager
+Comment=Manage SSH dynamic port forwarding (SOCKS5) tunnels
+Exec=ssh-vpn-manager
+Icon=org.sshvpnmanager.SshVpnManager
+Terminal=false
+Type=Application
+Categories=Network;System;
+StartupNotify=true

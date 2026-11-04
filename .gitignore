@@ -1,0 +1,28 @@
+# Build directories
+/build/
+/builddir/
+
+# Meson
+meson-logs/
+meson-private/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Caches
+.cache/
+.ccls-cache/
+
+# Compiled objects / binaries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+
+# Misc
+*~
+.DS_Store

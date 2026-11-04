@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.sshvpnmanager.SshVpnManager</id>
+  <name>SSH VPN Manager</name>
+  <summary>Manage SSH SOCKS5 tunnels</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      SSH VPN Manager keeps a list of SSH servers and local SOCKS5 (dynamic
+      port forwarding) tunnels. Each tunnel can be started and stopped, shows
+      its status, ping latency and transferred bytes, and reconnects
+      automatically when the connection drops.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.sshvpnmanager.SshVpnManager.desktop</launchable>
+  <provides>
+    <binary>ssh-vpn-manager</binary>
+  </provides>
+</component>

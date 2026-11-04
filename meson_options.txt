@@ -1,0 +1,4 @@
+option('tray',
+  type: 'feature',
+  value: 'auto',
+  description: 'Enable system tray icon support (requires ayatana-appindicator-glib)')
