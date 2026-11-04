@@ -113,6 +113,30 @@ Gtk::Button* make_icon_button(const std::string& label, const char* icon) {
   return btn;
 }
 
+std::vector<const Tunnel*> sorted_tunnels(const Model& model) {
+  std::vector<const Tunnel*> v;
+  v.reserve(model.tunnels.size());
+  for (const auto& t : model.tunnels) {
+    v.push_back(&t);
+  }
+  std::stable_sort(v.begin(), v.end(), [](const Tunnel* a, const Tunnel* b) {
+    return a->local_port < b->local_port;
+  });
+  return v;
+}
+
+std::vector<const Server*> sorted_servers(const Model& model) {
+  std::vector<const Server*> v;
+  v.reserve(model.servers.size());
+  for (const auto& s : model.servers) {
+    v.push_back(&s);
+  }
+  std::stable_sort(v.begin(), v.end(), [](const Server* a, const Server* b) {
+    return a->name < b->name;
+  });
+  return v;
+}
+
 void grid_row(Gtk::Grid& grid, int row, const char* label, Gtk::Widget& w) {
   auto* l = Gtk::make_managed<Gtk::Label>(label);
   l->set_halign(Gtk::Align::END);
@@ -265,9 +289,9 @@ public:
     local_port_->set_value(existing ? existing->local_port : 1080);
 
     std::vector<Glib::ustring> names;
-    for (const auto& s : model.servers) {
-      server_ids_.push_back(s.id);
-      names.emplace_back(s.name);
+    for (const Server* s : sorted_servers(model)) {
+      server_ids_.push_back(s->id);
+      names.emplace_back(s->name);
     }
     server_drop_ = Gtk::make_managed<Gtk::DropDown>(names);
 
@@ -324,7 +348,7 @@ public:
     auto* save = Gtk::make_managed<Gtk::Button>("Save");
     save->add_css_class("suggested-action");
     cancel->signal_clicked().connect([this] { close(); });
-    save->signal_clicked().connect([this, &model] { on_save(model); });
+    save->signal_clicked().connect([this] { on_save(); });
     btns->append(*cancel);
     btns->append(*save);
     box->append(*btns);
@@ -333,7 +357,7 @@ public:
   sigc::signal<void(Tunnel)> signal_saved;
 
 private:
-  void on_save(const Model& model) {
+  void on_save() {
     if (server_drop_->get_selected() == GTK_INVALID_LIST_POSITION) {
       return set_error(error_, "Add an SSH server first.");
     }
@@ -342,11 +366,6 @@ private:
     }
 
     const int port = local_port_->get_value_as_int();
-    for (const auto& t : model.tunnels) {
-      if (t.id != id_ && t.local_port == port) {
-        return set_error(error_, "Local port " + std::to_string(port) + " is already in use.");
-      }
-    }
 
     Tunnel t;
     t.id = id_.empty() ? Model::new_id() : id_;
@@ -513,7 +532,8 @@ void Window::rebuild_tunnels() {
   tunnel_rows_.clear();
   tunnel_list_->remove_all();
 
-  for (const auto& t : model_.tunnels) {
+  for (const Tunnel* tp : sorted_tunnels(model_)) {
+    const Tunnel& t = *tp;
     const Server* s = model_.find_server(t.server_id);
 
     auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
@@ -577,7 +597,8 @@ void Window::rebuild_tunnels() {
 void Window::rebuild_servers() {
   server_list_->remove_all();
 
-  for (const auto& s : model_.servers) {
+  for (const Server* sp : sorted_servers(model_)) {
+    const Server& s = *sp;
     auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
     row->set_margin_start(6);
     row->set_margin_end(6);
