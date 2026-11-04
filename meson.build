@@ -7,10 +7,11 @@ gtkmm     = dependency('gtkmm-4.0')
 adwaita   = dependency('libadwaita-1')
 libssh    = dependency('libssh')
 libsecret = dependency('libsecret-1')
+libcurl   = dependency('libcurl')
 nlohmann  = dependency('nlohmann_json')
 threads   = dependency('threads')
 
-deps = [gtkmm, adwaita, libssh, libsecret, nlohmann, threads]
+deps = [gtkmm, adwaita, libssh, libsecret, libcurl, nlohmann, threads]
 
 # System tray via StatusNotifierItem. Optional: the app still works without it
 # (closing hides the window, launching the app again re-shows it).

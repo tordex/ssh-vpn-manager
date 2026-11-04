@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <arpa/inet.h>
+#include <curl/curl.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -60,6 +61,11 @@ void close_forwarder(Forwarder& f) {
   }
 }
 
+// curl write callback: discard the response body (we only care about timing).
+std::size_t discard_body(char*, std::size_t size, std::size_t nmemb, void*) {
+  return size * nmemb;
+}
+
 }  // namespace
 
 TunnelWorker::TunnelWorker(TunnelTarget target, TunnelSettings settings,
@@ -92,11 +98,15 @@ void TunnelWorker::stop() {
     ssize_t r = ::write(stop_pipe_[1], &c, 1);
     (void)r;
   }
+  ping_cv_.notify_all();
 }
 
 void TunnelWorker::join() {
   if (thread_.joinable()) {
     thread_.join();
+  }
+  if (ping_thread_.joinable()) {
+    ping_thread_.join();
   }
 }
 
@@ -112,9 +122,16 @@ void TunnelWorker::set_status(TunnelStatus s, const std::string& error) {
     stats_.error = error;
     stats_.tx_bytes = tx_total_;
     stats_.rx_bytes = rx_total_;
-    stats_.ping_ms = ping_ms_;
     stats_.reconnect_attempt = reconnect_attempt_;
     stats_.max_reconnect_attempts = max_reconnect_attempts_;
+  }
+  if (notify_) notify_();
+}
+
+void TunnelWorker::set_ping(double ms) {
+  {
+    std::lock_guard<std::mutex> lk(stats_mutex_);
+    stats_.ping_ms = ms;
   }
   if (notify_) notify_();
 }
@@ -129,7 +146,6 @@ void TunnelWorker::publish_stats(std::size_t active_connections) {
     std::lock_guard<std::mutex> lk(stats_mutex_);
     stats_.tx_bytes = tx_total_;
     stats_.rx_bytes = rx_total_;
-    stats_.ping_ms = ping_ms_;
     stats_.active_connections = static_cast<int>(active_connections);
   }
   if (notify_) notify_();
@@ -189,18 +205,8 @@ bool TunnelWorker::connect_and_auth() {
 }
 
 void TunnelWorker::run_connected() {
-  using clock = std::chrono::steady_clock;
-  using namespace std::chrono;
-
   const int session_fd = ssh_get_fd(session_);
   std::vector<Forwarder> forwards;
-
-  ssh_channel ping_ch = nullptr;
-  bool ping_opening = false;
-  auto ping_start = clock::now();
-  const int ping_timeout_ms =
-      std::clamp(settings_.ping_interval_sec * 1000, 1000, 5000);
-  auto ping_next = clock::now() + seconds(std::max(1, settings_.ping_interval_sec));
 
   while (!stop_requested_.load()) {
     if (ssh_is_connected(session_) == 0) {
@@ -230,12 +236,7 @@ void TunnelWorker::run_connected() {
     pfds.push_back(pollfd{session_fd, sess_ev, 0});
     const std::size_t sess_i = pfds.size() - 1;
 
-    const auto now = clock::now();
-    int timeout_ms = 1000;
-    if (settings_.ping_interval_sec > 0) {
-      const long long remain = duration_cast<milliseconds>(ping_next - now).count();
-      timeout_ms = std::min(timeout_ms, (int)std::clamp<long long>(remain, 0, 1000));
-    }
+    const int timeout_ms = 1000;
 
     const int rc = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), timeout_ms);
     if (rc < 0) {
@@ -404,75 +405,75 @@ void TunnelWorker::run_connected() {
                                   }),
                    forwards.end());
 
-    // Ping probe (measures tunnel RTT to ping_host via direct-tcpip).
-    const auto now2 = clock::now();
-    if (settings_.ping_interval_sec > 0) {
-      if (ping_ch == nullptr) {
-        // No ping in flight: start one when due.
-        if (now2 >= ping_next) {
-          ping_next = now2 + seconds(settings_.ping_interval_sec);
-          ping_ch = ssh_channel_new(session_);
-          if (ping_ch) {
-            ping_opening = true;
-            ping_start = now2;
-            // Initiate the open immediately so the request goes out without
-            // waiting a full poll cycle.
-            const int o = ssh_channel_open_forward(
-                ping_ch, settings_.ping_host.c_str(), settings_.ping_port,
-                "127.0.0.1", settings_.local_port);
-            if (o == SSH_OK) {
-              ping_ms_ =
-                  duration<double, std::milli>(now2 - ping_start).count();
-              ssh_channel_close(ping_ch);
-              ping_opening = false;
-            } else if (o == SSH_ERROR) {
-              ping_ms_ = -1.0;
-              ssh_channel_free(ping_ch);
-              ping_ch = nullptr;
-            }
-            // SSH_AGAIN: keep opening.
-          }
-        }
-      } else if (ping_opening) {
-        const int o = ssh_channel_open_forward(
-            ping_ch, settings_.ping_host.c_str(), settings_.ping_port,
-            "127.0.0.1", settings_.local_port);
-        if (o == SSH_AGAIN) {
-          if (duration_cast<milliseconds>(now2 - ping_start).count() >
-              ping_timeout_ms) {
-            ping_ms_ = -1.0;
-            ssh_channel_free(ping_ch);
-            ping_ch = nullptr;
-            ping_opening = false;
-          }
-        } else if (o == SSH_OK) {
-          ping_ms_ = duration<double, std::milli>(now2 - ping_start).count();
-          ssh_channel_close(ping_ch);
-          ping_opening = false;
-        } else {  // SSH_ERROR
-          ping_ms_ = -1.0;
-          ssh_channel_free(ping_ch);
-          ping_ch = nullptr;
-          ping_opening = false;
-        }
-      } else {
-        // Ping measured; drain the close handshake so the server's close
-        // confirmation doesn't keep the socket readable (busy-spinning the
-        // loop while idle), then free the channel.
-        const int pr = ssh_channel_poll(ping_ch, 0);
-        if (pr == SSH_EOF || pr == SSH_ERROR) {
-          ssh_channel_free(ping_ch);
-          ping_ch = nullptr;
-        }
-      }
-    }
-
     publish_stats(forwards.size());
   }
 
-  if (ping_ch) ssh_channel_free(ping_ch);
   for (auto& f : forwards) close_forwarder(f);
   forwards.clear();
+}
+
+double TunnelWorker::do_probe() {
+  CURL* curl = curl_easy_init();
+  if (!curl) {
+    return -1.0;
+  }
+
+  const std::string url = "http://" + settings_.ping_host + ":" +
+                          std::to_string(settings_.ping_port) + "/";
+  const std::string proxy =
+      "socks5h://127.0.0.1:" + std::to_string(settings_.local_port);
+
+  const long timeout_ms =
+      std::clamp(settings_.ping_interval_sec * 1000, 1000, 5000);
+
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeout_ms);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_body);
+
+  const CURLcode rc = curl_easy_perform(curl);
+  double result = -1.0;
+  if (rc == CURLE_OK) {
+    double seconds = 0.0;
+    curl_easy_getinfo(curl, CURLINFO_STARTTRANSFER_TIME, &seconds);
+    result = seconds * 1000.0;  // curl reports seconds; ping_ms is milliseconds
+  }
+  curl_easy_cleanup(curl);
+  return result;
+}
+
+void TunnelWorker::run_ping() {
+  using clock = std::chrono::steady_clock;
+  std::unique_lock<std::mutex> lk(ping_mtx_);
+
+  while (!stop_requested_.load()) {
+    // Wait until the tunnel is connected.
+    ping_cv_.wait(
+        lk, [this] { return stop_requested_.load() || connected_.load(); });
+    if (stop_requested_.load()) break;
+
+    // Connected: schedule the next probe and wait for it to come due.
+    auto due = clock::now() + std::chrono::seconds(settings_.ping_interval_sec);
+    while (!stop_requested_.load() && connected_.load()) {
+      ping_cv_.wait_until(lk, due, [this] {
+        return stop_requested_.load() || !connected_.load();
+      });
+      if (stop_requested_.load() || !connected_.load()) break;
+      if (clock::now() < due) continue;  // spurious wake
+      due = clock::now() + std::chrono::seconds(settings_.ping_interval_sec);
+
+      lk.unlock();
+      const double ms = do_probe();
+      lk.lock();
+      if (stop_requested_.load()) break;
+      // The tunnel may have dropped while the probe was in flight; don't publish
+      // a stale result (the worker resets ping to -1 on disconnect).
+      if (connected_.load()) set_ping(ms);
+    }
+  }
 }
 
 void TunnelWorker::run() {
@@ -507,6 +508,10 @@ void TunnelWorker::run() {
   }
   listener_fd_ = fd;
 
+  if (settings_.ping_interval_sec > 0) {
+    ping_thread_ = std::thread(&TunnelWorker::run_ping, this);
+  }
+
   int backoff_ms = 1000;
   constexpr int kMaxBackoffMs = 30000;
   max_reconnect_attempts_ = settings_.max_reconnect_attempts;
@@ -515,9 +520,16 @@ void TunnelWorker::run() {
     set_status(TunnelStatus::Connecting);
     if (connect_and_auth()) {
       reconnect_attempt_ = 0;
+      connected_ = true;
+      ping_cv_.notify_all();
       set_status(TunnelStatus::Connected);
       backoff_ms = 1000;
       run_connected();
+
+      connected_ = false;
+      ping_cv_.notify_all();
+      set_ping(-1.0);
+
       if (session_) {
         ssh_disconnect(session_);
         ssh_free(session_);

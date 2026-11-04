@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -68,6 +69,9 @@ private:
   void run();
   bool connect_and_auth();
   void run_connected();
+  void run_ping();
+  void set_ping(double ms);
+  double do_probe();
   void set_status(TunnelStatus s, const std::string& error = "");
   void publish_stats(std::size_t active_connections);
   bool wait_interruptible(int timeout_ms);  // true if stop was requested
@@ -79,6 +83,14 @@ private:
   std::thread thread_;
   std::atomic<bool> stop_requested_{false};
 
+  // Ping probe thread. It makes a real HTTP request through the tunnel's own
+  // SOCKS5 listener (see do_probe), so it must not run on the worker thread,
+  // which services that listener in its poll() loop.
+  std::thread ping_thread_;
+  std::mutex ping_mtx_;
+  std::condition_variable ping_cv_;
+  std::atomic<bool> connected_{false};
+
   int stop_pipe_[2] = {-1, -1};
   int listener_fd_ = -1;
 
@@ -89,7 +101,6 @@ private:
   TunnelStats stats_;
   std::uint64_t tx_total_ = 0;
   std::uint64_t rx_total_ = 0;
-  double ping_ms_ = -1.0;
   int reconnect_attempt_ = 0;
   int max_reconnect_attempts_ = 0;
   std::string last_connect_error_;  // worker-thread only (no mutex)

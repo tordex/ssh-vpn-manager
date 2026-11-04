@@ -13,7 +13,7 @@ meson test -C build        # one test: SOCKS5 handshake parser
 ```
 
 Dependencies (pkg-config): `gtkmm-4.0`, `libadwaita-1`, `libssh`, `libsecret-1`,
-`nlohmann_json`. Optional: `ayatana-appindicator-glib` (tray).
+`libcurl`, `nlohmann_json`. Optional: `ayatana-appindicator-glib` (tray).
 
 ## Architecture
 
@@ -55,7 +55,9 @@ Dependencies (pkg-config): `gtkmm-4.0`, `libadwaita-1`, `libssh`, `libsecret-1`,
   `ssh_channel_read_nonblocking`, and `ssh_channel_write` all return `SSH_AGAIN`
   and must be retried on the next poll wake. Do not switch to blocking calls.
 - Only the `direct-tcpip` channel is used (no shell); each SOCKS `CONNECT` opens
-  one. Ping = a short-lived `direct-tcpip` open to `ping_host:ping_port`.
+  one. Ping is done by a separate per-tunnel thread that makes an HTTP request
+  through the tunnel's own SOCKS5 listener via libcurl (see
+  `TunnelWorker::do_probe`), NOT by opening a `direct-tcpip` channel directly.
 - `connect_and_auth()` is blocking (bounded by `SSH_OPTIONS_TIMEOUT`); it runs
   before the poll loop starts.
 - `ssh_tunnel.cpp` needs `_GNU_SOURCE` (for `pipe2`/`accept4`/`SOCK_NONBLOCK`).
