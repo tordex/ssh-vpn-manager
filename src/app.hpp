@@ -25,6 +25,8 @@ protected:
   void on_startup() override;
   void on_activate() override;
   void on_shutdown() override;
+  int on_handle_local_options(
+      const Glib::RefPtr<Glib::VariantDict>& options) override;
 
 private:
   void create_window();
@@ -38,4 +40,5 @@ private:
   std::unique_ptr<TrayIcon> tray_;
   Window* window_ = nullptr;  // owned by Gtk::Application
   bool autostart_done_ = false;
+  bool hidden_ = false;
 };

@@ -2,7 +2,10 @@
 
 #include "window.hpp"
 
-App::App() : Gtk::Application("org.sshvpnmanager.SshVpnManager") {}
+App::App() : Gtk::Application("org.sshvpnmanager.SshVpnManager") {
+  add_main_option_entry(OptionType::BOOL, "hidden", '\0',
+                        "Run without showing the main window (tray icon only).");
+}
 
 Glib::RefPtr<App> App::create() {
   return Glib::make_refptr_for_instance<App>(new App());
@@ -30,12 +33,26 @@ void App::on_startup() {
 }
 
 void App::on_activate() {
-  create_window();
-  window_->present();
   if (!autostart_done_) {
     autostart_done_ = true;
     start_autostart_tunnels();
+    if (hidden_) {
+      // Hidden mode: no main window, keep running with only the tray icon.
+      // Gtk::Application quits when it has no windows, so hold it alive.
+      hold();
+      return;
+    }
   }
+  create_window();
+  window_->present();
+}
+
+int App::on_handle_local_options(
+    const Glib::RefPtr<Glib::VariantDict>& options) {
+  if (options->contains("hidden")) {
+    hidden_ = true;
+  }
+  return -1;  // continue with normal activation
 }
 
 void App::on_shutdown() {

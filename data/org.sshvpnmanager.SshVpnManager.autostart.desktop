@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=SSH VPN Manager
+Comment=Start SSH VPN Manager hidden in the system tray at login
+Exec=ssh-vpn-manager --hidden
+Icon=org.sshvpnmanager.SshVpnManager
+Terminal=false
+Categories=Network;System;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

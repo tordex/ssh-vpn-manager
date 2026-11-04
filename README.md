@@ -20,6 +20,8 @@ A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 - Transferred byte counters (Tx / Rx).
 - "Run on startup" flag per tunnel (starts the tunnel when the app launches).
 - Closing the window hides it to a system tray icon; the tray icon restores it.
+- Hidden mode: start with no window (tray only) via `--hidden`, so tunnels marked
+  "run on startup" come up silently at login.
 
 ## Dependencies
 
@@ -51,6 +53,26 @@ Install (optional):
 ```sh
 meson install -C build
 ```
+
+### Hidden mode & autostart
+
+Start the app hidden (tray icon only, no main window):
+
+```sh
+./build/ssh-vpn-manager --hidden
+```
+
+Tunnels marked "run on startup" are still started in hidden mode. To show the
+window afterwards, click the tray icon (or launch the app again).
+
+To start hidden automatically at login, copy the provided desktop entry into
+your XDG autostart directory:
+
+```sh
+cp data/org.sshvpnmanager.SshVpnManager.autostart.desktop ~/.config/autostart/
+```
+
+(Log out and back in, or use your desktop environment's autostart settings.)
 
 ### System tray
 
