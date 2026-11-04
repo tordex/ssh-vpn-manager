@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include <pango/pango.h>
+
 #include "app.hpp"
 
 namespace {
@@ -70,12 +72,32 @@ std::string status_markup(const TunnelStats& st) {
   return m;
 }
 
+// Cap an ellipsizing label's natural width to `width` pixels. Long text then
+// ellipsizes within its column instead of widening it (which would push the
+// following columns out of alignment). The character count uses the same font
+// metric GTK itself uses for set_max_width_chars() (the larger of the font's
+// approximate char width and digit width), so it stays exact under any
+// font size or DPI scaling.
+void constrain_ellipsized(Gtk::Label& label, int width) {
+  label.set_ellipsize(Pango::EllipsizeMode::END);
+
+  PangoContext* ctx = label.get_pango_context()->gobj();
+  PangoFontMetrics* metrics = pango_context_get_metrics(ctx, nullptr, nullptr);
+  const int char_pixels =
+      std::max(pango_font_metrics_get_approximate_char_width(metrics),
+               pango_font_metrics_get_approximate_digit_width(metrics));
+  pango_font_metrics_unref(metrics);
+
+  const int px_per_char = char_pixels / PANGO_SCALE;
+  label.set_max_width_chars(px_per_char > 0 ? width / px_per_char : width / 8);
+}
+
 Gtk::Label* make_cell(const std::string& text, int width, float xalign, bool ellipsize) {
   auto* l = Gtk::make_managed<Gtk::Label>(text);
   l->set_size_request(width, -1);
   l->set_xalign(xalign);
   if (ellipsize) {
-    l->set_ellipsize(Pango::EllipsizeMode::END);
+    constrain_ellipsized(*l, width);
   }
   return l;
 }
@@ -495,7 +517,7 @@ void Window::rebuild_tunnels() {
     rw.status = Gtk::make_managed<Gtk::Label>();
     rw.status->set_size_request(130, -1);
     rw.status->set_xalign(0.0f);
-    rw.status->set_ellipsize(Pango::EllipsizeMode::END);
+    constrain_ellipsized(*rw.status, 130);
     rw.error = make_cell("", 220, 0.0f, true);
     rw.ping = make_cell("", 70, 1.0f, false);
     rw.tx = make_cell("", 70, 1.0f, false);
