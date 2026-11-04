@@ -102,6 +102,17 @@ Gtk::Label* make_cell(const std::string& text, int width, float xalign, bool ell
   return l;
 }
 
+Gtk::Button* make_icon_button(const std::string& label, const char* icon) {
+  auto* btn = Gtk::make_managed<Gtk::Button>();
+  auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+  auto* img = Gtk::make_managed<Gtk::Image>();
+  img->set_from_icon_name(icon);
+  box->append(*img);
+  box->append(*Gtk::make_managed<Gtk::Label>(label));
+  btn->set_child(*box);
+  return btn;
+}
+
 void grid_row(Gtk::Grid& grid, int row, const char* label, Gtk::Widget& w) {
   auto* l = Gtk::make_managed<Gtk::Label>(label);
   l->set_halign(Gtk::Align::END);
@@ -389,13 +400,13 @@ void Window::build_ui() {
   auto* hb = Gtk::make_managed<Gtk::HeaderBar>();
   hb->set_title_widget(*Gtk::make_managed<Gtk::Label>("SSH VPN Manager"));
 
-  auto* add_tunnel = Gtk::make_managed<Gtk::Button>("Add Tunnel");
+  auto* add_tunnel = make_icon_button("Add Tunnel", "list-add-symbolic");
   add_tunnel->signal_clicked().connect([this] { on_add_tunnel(); });
   hb->pack_start(*add_tunnel);
 
-  auto* add_server = Gtk::make_managed<Gtk::Button>("Add Server");
+  auto* add_server = make_icon_button("Add Server", "list-add-symbolic");
   add_server->signal_clicked().connect([this] { on_add_server(); });
-  hb->pack_end(*add_server);
+  hb->pack_start(*add_server);
 
   auto* quit = Gtk::make_managed<Gtk::Button>("Quit");
   quit->signal_clicked().connect([this] {
