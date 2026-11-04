@@ -11,12 +11,18 @@ Glib::RefPtr<App> App::create() {
 void App::on_startup() {
   Gtk::Application::on_startup();
 
+  // Keep the window connected to the application while it is hidden, so the app
+  // keeps running in the tray. Otherwise Gtk::Application quits when its last
+  // window is hidden/removed. (Closing hides instead of destroying, see
+  // Window::build_ui.)
+  Gtk::Window::set_remove_on_hide(false);
+
   std::string err;
   if (!model_.load(&err)) {
     g_warning("failed to load config: %s", err.c_str());
   }
 
-  controller_ = std::make_unique<TunnelController>(model_, secrets_);
+  controller_ = std::make_unique<TunnelController>(model_, secrets_, log_);
 
   tray_ = std::make_unique<TrayIcon>(
       [this] { show_window(); },
@@ -45,7 +51,7 @@ void App::create_window() {
   if (window_) {
     return;
   }
-  window_ = new Window(model_, secrets_, *controller_);
+  window_ = new Window(model_, secrets_, *controller_, log_);
   add_window(*window_);
 }
 
@@ -55,9 +61,6 @@ void App::show_window() {
 }
 
 void App::quit_requested() {
-  if (window_) {
-    window_->allow_close();
-  }
   quit();
 }
 

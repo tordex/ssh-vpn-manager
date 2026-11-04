@@ -61,6 +61,7 @@ bool Model::load(std::string* error) {
         tn.ping_port = t.value("ping_port", 80);
         tn.ping_interval_sec = t.value("ping_interval_sec", 10);
         tn.connect_timeout_sec = t.value("connect_timeout_sec", 10);
+        tn.max_reconnect_attempts = t.value("max_reconnect_attempts", 5);
         tn.run_on_startup = t.value("run_on_startup", false);
         if (!tn.id.empty()) {
           tunnels.push_back(std::move(tn));
@@ -95,6 +96,7 @@ bool Model::save(std::string* error) const {
                             {"ping_port", t.ping_port},
                             {"ping_interval_sec", t.ping_interval_sec},
                             {"connect_timeout_sec", t.connect_timeout_sec},
+                            {"max_reconnect_attempts", t.max_reconnect_attempts},
                             {"run_on_startup", t.run_on_startup}});
   }
 

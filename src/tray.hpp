@@ -13,7 +13,10 @@ public:
   TrayIcon(const TrayIcon&) = delete;
   TrayIcon& operator=(const TrayIcon&) = delete;
 
-private:
+  // Opaque implementation type (defined in tray.cpp). Public so the GLib C
+  // callbacks in tray.cpp can reference it; it is incomplete here.
   struct Impl;
+
+private:
   Impl* impl_ = nullptr;
 };

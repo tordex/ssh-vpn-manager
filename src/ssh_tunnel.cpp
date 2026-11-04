@@ -113,6 +113,8 @@ void TunnelWorker::set_status(TunnelStatus s, const std::string& error) {
     stats_.tx_bytes = tx_total_;
     stats_.rx_bytes = rx_total_;
     stats_.ping_ms = ping_ms_;
+    stats_.reconnect_attempt = reconnect_attempt_;
+    stats_.max_reconnect_attempts = max_reconnect_attempts_;
   }
   if (notify_) notify_();
 }
@@ -150,7 +152,7 @@ bool TunnelWorker::wait_interruptible(int timeout_ms) {
 bool TunnelWorker::connect_and_auth() {
   session_ = ssh_new();
   if (!session_) {
-    set_status(TunnelStatus::Reconnecting, "failed to allocate SSH session");
+    last_connect_error_ = "failed to allocate SSH session";
     return false;
   }
 
@@ -164,23 +166,24 @@ bool TunnelWorker::connect_and_auth() {
   ssh_options_set(session_, SSH_OPTIONS_TIMEOUT_USEC, &timeout_us);
 
   if (ssh_connect(session_) != SSH_OK) {
-    const std::string msg = "connect failed: " + std::string(ssh_get_error(session_));
+    last_connect_error_ =
+        "connect failed: " + std::string(ssh_get_error(session_));
     ssh_free(session_);
     session_ = nullptr;
-    set_status(TunnelStatus::Reconnecting, msg);
     return false;
   }
 
   const int rc = ssh_userauth_password(session_, nullptr, target_.password.c_str());
   if (rc != SSH_AUTH_SUCCESS) {
-    const std::string msg = "authentication failed: " + std::string(ssh_get_error(session_));
+    last_connect_error_ =
+        "authentication failed: " + std::string(ssh_get_error(session_));
     ssh_disconnect(session_);
     ssh_free(session_);
     session_ = nullptr;
-    set_status(TunnelStatus::Reconnecting, msg);
     return false;
   }
 
+  last_connect_error_.clear();
   ssh_set_blocking(session_, 0);
   return true;
 }
@@ -462,10 +465,12 @@ void TunnelWorker::run() {
 
   int backoff_ms = 1000;
   constexpr int kMaxBackoffMs = 30000;
+  max_reconnect_attempts_ = settings_.max_reconnect_attempts;
 
   while (!stop_requested_.load()) {
     set_status(TunnelStatus::Connecting);
     if (connect_and_auth()) {
+      reconnect_attempt_ = 0;
       set_status(TunnelStatus::Connected);
       backoff_ms = 1000;
       run_connected();
@@ -476,7 +481,24 @@ void TunnelWorker::run() {
       }
       if (stop_requested_.load()) break;
       set_status(TunnelStatus::Reconnecting, "connection lost, reconnecting");
+    } else {
+      // A connect attempt failed (initial or reconnect). Count it, and give up
+      // once the configured limit is reached.
+      ++reconnect_attempt_;
+
+      if (max_reconnect_attempts_ > 0 &&
+          reconnect_attempt_ >= max_reconnect_attempts_) {
+        set_status(TunnelStatus::Error,
+                   "gave up after " + std::to_string(reconnect_attempt_) +
+                       " reconnect attempts");
+        wait_interruptible(-1);
+        break;
+      }
+
+      set_status(TunnelStatus::Reconnecting, last_connect_error_);
     }
+
+    if (stop_requested_.load()) break;
     if (wait_interruptible(backoff_ms)) break;
     backoff_ms = std::min(backoff_ms * 2, kMaxBackoffMs);
   }

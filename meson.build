@@ -29,6 +29,7 @@ sources = files(
   'src/ssh_tunnel.cpp',
   'src/socks5.cpp',
   'src/tunnel_controller.cpp',
+  'src/log.cpp',
   'src/tray.cpp',
 )
 

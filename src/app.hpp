@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "log.hpp"
 #include "model.hpp"
 #include "secret_store.hpp"
 #include "tray.hpp"
@@ -32,6 +33,7 @@ private:
 
   Model model_;
   SecretStore secrets_;
+  Log log_{Log::default_file_path()};
   std::unique_ptr<TunnelController> controller_;
   std::unique_ptr<TrayIcon> tray_;
   Window* window_ = nullptr;  // owned by Gtk::Application

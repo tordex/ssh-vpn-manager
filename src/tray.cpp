@@ -57,7 +57,9 @@ TrayIcon::TrayIcon(std::function<void()> on_show, std::function<void()> on_quit)
   app_indicator_set_status(impl_->indicator, APP_INDICATOR_STATUS_ACTIVE);
   app_indicator_set_title(impl_->indicator, "SSH VPN Manager");
 
-  g_signal_connect(impl_->indicator, "activate-event", G_CALLBACK(on_activate_event), impl_);
+  // "activate" is the primary-activation signal (left-click) in ayatana 2.x
+  // (it was called "activate-event" in the older libappindicator 0.x API).
+  g_signal_connect(impl_->indicator, "activate", G_CALLBACK(on_activate_event), impl_);
 
   impl_->actions = g_simple_action_group_new();
   GSimpleAction* a_show = g_simple_action_new("show", nullptr);

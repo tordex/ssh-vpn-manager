@@ -5,18 +5,18 @@
 #include <map>
 #include <string>
 
+#include "log.hpp"
 #include "model.hpp"
 #include "secret_store.hpp"
 #include "tunnel_controller.hpp"
 
-// Main application window: two tabs (Tunnels, Servers) plus dialogs for editing.
+// Main application window: three tabs (Tunnels, Servers, Log) plus dialogs for
+// editing.
 class Window : public Gtk::ApplicationWindow {
 public:
-  Window(Model& model, SecretStore& secrets, TunnelController& controller);
+  Window(Model& model, SecretStore& secrets, TunnelController& controller,
+         Log& log);
   ~Window() override;
-
-  // Called by App before quitting so the close-request handler lets the window go.
-  void allow_close();
 
 private:
   void build_ui();
@@ -24,6 +24,7 @@ private:
   void rebuild_tunnels();
   void rebuild_servers();
   void refresh_tunnel_row(const std::string& id);
+  void refresh_log();
 
   void on_add_server();
   void on_add_tunnel();
@@ -38,17 +39,19 @@ private:
   Model& model_;
   SecretStore& secrets_;
   TunnelController& controller_;
-
-  bool quitting_ = false;
+  Log& log_;
 
   Gtk::ListBox* tunnel_list_ = nullptr;
   Gtk::ListBox* server_list_ = nullptr;
+  Gtk::TextView* log_view_ = nullptr;
+  Glib::RefPtr<Gtk::TextBuffer> log_buffer_;
 
   // Per-tunnel row labels (for in-place stats updates), keyed by tunnel id.
   struct RowWidgets {
     Gtk::Label* port = nullptr;
     Gtk::Label* server = nullptr;
     Gtk::Label* status = nullptr;
+    Gtk::Label* error = nullptr;
     Gtk::Label* ping = nullptr;
     Gtk::Label* tx = nullptr;
     Gtk::Label* rx = nullptr;

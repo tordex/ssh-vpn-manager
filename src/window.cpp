@@ -55,11 +55,17 @@ const char* status_color(TunnelStatus s) {
   return "#9a9996";
 }
 
-std::string status_markup(TunnelStatus s) {
+std::string status_markup(const TunnelStats& st) {
+  std::string name = status_name(st.status);
+  if (st.status == TunnelStatus::Reconnecting && st.max_reconnect_attempts > 0 &&
+      st.reconnect_attempt > 0) {
+    name += " (" + std::to_string(st.reconnect_attempt) + "/" +
+            std::to_string(st.max_reconnect_attempts) + ")";
+  }
   std::string m = "<span color='";
-  m += status_color(s);
+  m += status_color(st.status);
   m += "'>";
-  m += status_name(s);
+  m += name;
   m += "</span>";
   return m;
 }
@@ -237,6 +243,12 @@ public:
     timeout_->set_increments(1, 5);
     timeout_->set_value(existing ? existing->connect_timeout_sec : 10);
 
+    reconnect_ = Gtk::make_managed<Gtk::SpinButton>();
+    reconnect_->set_range(0, 999);
+    reconnect_->set_increments(1, 1);
+    reconnect_->set_value(existing ? existing->max_reconnect_attempts : 5);
+    reconnect_->set_tooltip_text("Maximum consecutive reconnect attempts before giving up (0 = keep trying forever).");
+
     ping_host_ = Gtk::make_managed<Gtk::Entry>();
     ping_host_->set_text(existing ? existing->ping_host : "1.1.1.1");
 
@@ -263,10 +275,11 @@ public:
     grid_row(*grid, 0, "Local port", *local_port_);
     grid_row(*grid, 1, "SSH server", *server_drop_);
     grid_row(*grid, 2, "Connect timeout (s)", *timeout_);
-    grid_row(*grid, 3, "Ping host", *ping_host_);
-    grid_row(*grid, 4, "Ping port", *ping_port_);
-    grid_row(*grid, 5, "Ping interval (s)", *ping_interval_);
-    grid->attach(*autostart_, 1, 6, 1, 1);
+    grid_row(*grid, 3, "Max reconnect attempts", *reconnect_);
+    grid_row(*grid, 4, "Ping host", *ping_host_);
+    grid_row(*grid, 5, "Ping port", *ping_port_);
+    grid_row(*grid, 6, "Ping interval (s)", *ping_interval_);
+    grid->attach(*autostart_, 1, 7, 1, 1);
     box->append(*grid);
 
     error_ = make_error_label();
@@ -310,6 +323,7 @@ private:
     t.ping_port = ping_port_->get_value_as_int();
     t.ping_interval_sec = ping_interval_->get_value_as_int();
     t.connect_timeout_sec = timeout_->get_value_as_int();
+    t.max_reconnect_attempts = reconnect_->get_value_as_int();
     t.run_on_startup = autostart_->get_active();
 
     signal_saved.emit(std::move(t));
@@ -319,6 +333,7 @@ private:
   Gtk::SpinButton* local_port_;
   Gtk::DropDown* server_drop_;
   Gtk::SpinButton* timeout_;
+  Gtk::SpinButton* reconnect_;
   Gtk::Entry* ping_host_;
   Gtk::SpinButton* ping_port_;
   Gtk::SpinButton* ping_interval_;
@@ -330,22 +345,23 @@ private:
 
 }  // namespace
 
-Window::Window(Model& model, SecretStore& secrets, TunnelController& controller)
-    : model_(model), secrets_(secrets), controller_(controller) {
+Window::Window(Model& model, SecretStore& secrets, TunnelController& controller,
+               Log& log)
+    : model_(model), secrets_(secrets), controller_(controller), log_(log) {
   build_ui();
   rebuild_tunnels();
   rebuild_servers();
+  refresh_log();
 
   controller_.signal_changed.connect(
       [this](const std::string& id) { refresh_tunnel_row(id); });
+  log_.signal_changed.connect([this] { refresh_log(); });
 }
 
 Window::~Window() = default;
 
-void Window::allow_close() { quitting_ = true; }
-
 void Window::build_ui() {
-  set_default_size(900, 480);
+  set_default_size(1080, 480);
   set_title("SSH VPN Manager");
 
   auto* hb = Gtk::make_managed<Gtk::HeaderBar>();
@@ -369,13 +385,9 @@ void Window::build_ui() {
 
   set_titlebar(*hb);
 
-  // Close hides to tray; Quit (button or tray) actually exits.
-  signal_close_request().connect(
-      [this] {
-        if (!quitting_) hide();
-        return !quitting_;  // true -> block close, false -> allow
-      },
-      false);
+  // Closing the window hides it to the tray instead of destroying it; Quit
+  // (button or tray menu) actually exits.
+  set_hide_on_close(true);
 
   auto* notebook = Gtk::make_managed<Gtk::Notebook>();
 
@@ -387,12 +399,13 @@ void Window::build_ui() {
   thead->set_margin_end(6);
   thead->set_margin_top(8);
   thead->set_margin_bottom(4);
-  thead->append(*make_cell("Port", 140, 0.0f, false));
-  thead->append(*make_cell("Server", 170, 0.0f, false));
-  thead->append(*make_cell("Status", 120, 0.0f, false));
-  thead->append(*make_cell("Ping", 80, 1.0f, false));
-  thead->append(*make_cell("Tx", 90, 1.0f, false));
-  thead->append(*make_cell("Rx", 90, 1.0f, false));
+  thead->append(*make_cell("Port", 130, 0.0f, false));
+  thead->append(*make_cell("Server", 150, 0.0f, false));
+  thead->append(*make_cell("Status", 130, 0.0f, false));
+  thead->append(*make_cell("Error", 220, 0.0f, true));
+  thead->append(*make_cell("Ping", 70, 1.0f, false));
+  thead->append(*make_cell("Tx", 70, 1.0f, false));
+  thead->append(*make_cell("Rx", 70, 1.0f, false));
   tunnels_box->append(*thead);
 
   tunnel_list_ = Gtk::make_managed<Gtk::ListBox>();
@@ -430,6 +443,36 @@ void Window::build_ui() {
   auto* stab = Gtk::make_managed<Gtk::Label>("Servers");
   notebook->append_page(*servers_box, *stab);
 
+  // --- Log tab ---
+  auto* log_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+
+  auto* toolbar = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+  toolbar->set_margin_start(6);
+  toolbar->set_margin_end(6);
+  toolbar->set_margin_top(8);
+  toolbar->set_margin_bottom(4);
+  auto* clear_btn = Gtk::make_managed<Gtk::Button>("Clear");
+  clear_btn->set_halign(Gtk::Align::END);
+  clear_btn->set_hexpand(true);
+  clear_btn->signal_clicked().connect([this] { log_.clear(); });
+  toolbar->append(*clear_btn);
+  log_box->append(*toolbar);
+
+  log_buffer_ = Gtk::TextBuffer::create();
+  log_view_ = Gtk::make_managed<Gtk::TextView>(log_buffer_);
+  log_view_->set_editable(false);
+  log_view_->set_cursor_visible(false);
+  log_view_->set_monospace(true);
+  log_view_->set_wrap_mode(Gtk::WrapMode::WORD_CHAR);
+  auto* log_scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+  log_scroll->set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
+  log_scroll->set_child(*log_view_);
+  log_scroll->set_vexpand(true);
+  log_box->append(*log_scroll);
+
+  auto* ltab = Gtk::make_managed<Gtk::Label>("Log");
+  notebook->append_page(*log_box, *ltab);
+
   set_child(*notebook);
 }
 
@@ -447,18 +490,21 @@ void Window::rebuild_tunnels() {
     row->set_margin_bottom(4);
 
     RowWidgets rw;
-    rw.port = make_cell("", 140, 0.0f, false);
-    rw.server = make_cell(s ? s->name : "<missing>", 170, 0.0f, true);
+    rw.port = make_cell("", 130, 0.0f, false);
+    rw.server = make_cell(s ? s->name : "<missing>", 150, 0.0f, true);
     rw.status = Gtk::make_managed<Gtk::Label>();
-    rw.status->set_size_request(120, -1);
+    rw.status->set_size_request(130, -1);
     rw.status->set_xalign(0.0f);
-    rw.ping = make_cell("", 80, 1.0f, false);
-    rw.tx = make_cell("", 90, 1.0f, false);
-    rw.rx = make_cell("", 90, 1.0f, false);
+    rw.status->set_ellipsize(Pango::EllipsizeMode::END);
+    rw.error = make_cell("", 220, 0.0f, true);
+    rw.ping = make_cell("", 70, 1.0f, false);
+    rw.tx = make_cell("", 70, 1.0f, false);
+    rw.rx = make_cell("", 70, 1.0f, false);
 
     row->append(*rw.port);
     row->append(*rw.server);
     row->append(*rw.status);
+    row->append(*rw.error);
     row->append(*rw.ping);
     row->append(*rw.tx);
     row->append(*rw.rx);
@@ -532,12 +578,31 @@ void Window::refresh_tunnel_row(const std::string& id) {
 
   it->second.port->set_text(port);
   it->second.server->set_text(s ? s->name : "<missing>");
-  it->second.status->set_markup(status_markup(st.status));
+  it->second.status->set_markup(status_markup(st));
   it->second.status->set_tooltip_text(st.error);
+  it->second.error->set_text(st.error);
+  it->second.error->set_tooltip_text(st.error);
   it->second.ping->set_text(ping_text(st.ping_ms));
   it->second.tx->set_text(format_bytes(st.tx_bytes));
   it->second.rx->set_text(format_bytes(st.rx_bytes));
   it->second.toggle->set_label(controller_.is_running(id) ? "Stop" : "Run");
+}
+
+void Window::refresh_log() {
+  if (!log_buffer_ || !log_view_) return;
+
+  std::string text;
+  const auto& entries = log_.entries();
+  text.reserve(entries.size() * 64);
+  for (const auto& line : entries) {
+    text += line;
+    text += '\n';
+  }
+  log_buffer_->set_text(text);
+
+  auto end = log_buffer_->end();
+  log_buffer_->place_cursor(end);
+  log_view_->scroll_to(end);
 }
 
 void Window::on_add_server() {

@@ -25,6 +25,8 @@ struct TunnelStats {
   std::uint64_t tx_bytes = 0;  // bytes forwarded into the tunnel (upload)
   std::uint64_t rx_bytes = 0;  // bytes forwarded out of the tunnel (download)
   int active_connections = 0;  // currently open SOCKS connections
+  int reconnect_attempt = 0;   // consecutive failed (re)connect attempts so far
+  int max_reconnect_attempts = 0;  // configured limit (0 = unlimited)
 };
 
 struct TunnelTarget {
@@ -40,6 +42,7 @@ struct TunnelSettings {
   int ping_port = 80;
   int ping_interval_sec = 10;
   int connect_timeout_sec = 10;
+  int max_reconnect_attempts = 5;  // 0 = keep retrying forever
 };
 
 // One background thread per running tunnel. Owns the libssh session, a loopback
@@ -87,5 +90,8 @@ private:
   std::uint64_t tx_total_ = 0;
   std::uint64_t rx_total_ = 0;
   double ping_ms_ = -1.0;
+  int reconnect_attempt_ = 0;
+  int max_reconnect_attempts_ = 0;
+  std::string last_connect_error_;  // worker-thread only (no mutex)
   std::chrono::steady_clock::time_point last_notify_{};
 };
