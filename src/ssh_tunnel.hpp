@@ -66,8 +66,10 @@ public:
   TunnelStats stats() const;
 
 private:
+  enum class ConnectResult { Connected, Failed, Stopped };
+
   void run();
-  bool connect_and_auth();
+  ConnectResult connect_and_auth();
   void run_connected();
   void run_ping();
   void set_ping(double ms);
@@ -75,6 +77,7 @@ private:
   void set_status(TunnelStatus s, const std::string& error = "");
   void publish_stats(std::size_t active_connections);
   bool wait_interruptible(int timeout_ms);  // true if stop was requested
+  int wait_for_ssh(int timeout_ms);         // 1=ssh ready, 0=timeout, -1=stop
 
   TunnelTarget target_;
   TunnelSettings settings_;

@@ -165,11 +165,31 @@ bool TunnelWorker::wait_interruptible(int timeout_ms) {
   return true;
 }
 
-bool TunnelWorker::connect_and_auth() {
+// Poll the SSH socket (and the stop pipe) for up to timeout_ms.
+// Returns 1 when the SSH fd is ready, 0 on timeout, -1 when stop is requested.
+int TunnelWorker::wait_for_ssh(int timeout_ms) {
+  const int fd = ssh_get_fd(session_);
+  pollfd pfds[2] = {
+      {stop_pipe_[0], POLLIN, 0},
+      {fd, POLLIN | POLLOUT, 0},  // either direction can wake us
+  };
+  for (;;) {
+    const int rc = poll(pfds, 2, timeout_ms);
+    if (rc < 0) {
+      if (errno == EINTR) continue;
+      return 0;  // treat unexpected errors as timeout; the deadline catches it
+    }
+    if (pfds[0].revents & (POLLIN | POLLHUP | POLLERR)) return -1;
+    if (rc > 0) return 1;
+    return 0;
+  }
+}
+
+TunnelWorker::ConnectResult TunnelWorker::connect_and_auth() {
   session_ = ssh_new();
   if (!session_) {
     last_connect_error_ = "failed to allocate SSH session";
-    return false;
+    return ConnectResult::Failed;
   }
 
   unsigned int port = static_cast<unsigned int>(target_.port);
@@ -181,31 +201,97 @@ bool TunnelWorker::connect_and_auth() {
   ssh_options_set(session_, SSH_OPTIONS_TIMEOUT, &timeout_s);
   ssh_options_set(session_, SSH_OPTIONS_TIMEOUT_USEC, &timeout_us);
 
-  if (ssh_connect(session_) != SSH_OK) {
-    last_connect_error_ =
-        "connect failed: " + std::string(ssh_get_error(session_));
-    ssh_free(session_);
-    session_ = nullptr;
-    return false;
+  // Nonblocking from the start so stop() can interrupt us and we never block
+  // the worker thread (and therefore never block stop()'s join()).
+  ssh_set_blocking(session_, 0);
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s);
+
+  auto timed_out = [&] {
+    return std::chrono::steady_clock::now() >= deadline;
+  };
+
+  // --- connect ---
+  for (;;) {
+    if (stop_requested_.load()) {
+      ssh_free(session_);
+      session_ = nullptr;
+      return ConnectResult::Stopped;
+    }
+    if (timed_out()) {
+      last_connect_error_ = "connect timed out";
+      ssh_free(session_);
+      session_ = nullptr;
+      return ConnectResult::Failed;
+    }
+    const int rc = ssh_connect(session_);
+    if (rc == SSH_OK) break;
+    if (rc != SSH_AGAIN) {
+      last_connect_error_ =
+          "connect failed: " + std::string(ssh_get_error(session_));
+      ssh_free(session_);
+      session_ = nullptr;
+      return ConnectResult::Failed;
+    }
+    if (wait_for_ssh(250) < 0) {  // small slices to re-check stop/deadline
+      ssh_free(session_);
+      session_ = nullptr;
+      return ConnectResult::Stopped;
+    }
   }
 
-  const int rc = ssh_userauth_password(session_, nullptr, target_.password.c_str());
-  if (rc != SSH_AUTH_SUCCESS) {
+  // --- authenticate ---
+  for (;;) {
+    if (stop_requested_.load()) {
+      ssh_disconnect(session_);
+      ssh_free(session_);
+      session_ = nullptr;
+      return ConnectResult::Stopped;
+    }
+    if (timed_out()) {
+      last_connect_error_ = "authentication timed out";
+      ssh_disconnect(session_);
+      ssh_free(session_);
+      session_ = nullptr;
+      return ConnectResult::Failed;
+    }
+    const int rc = ssh_userauth_password(session_, nullptr, target_.password.c_str());
+    if (rc == SSH_AUTH_SUCCESS) break;
+    if (rc == SSH_AUTH_AGAIN) {
+      if (wait_for_ssh(250) < 0) {
+        ssh_disconnect(session_);
+        ssh_free(session_);
+        session_ = nullptr;
+        return ConnectResult::Stopped;
+      }
+      continue;
+    }
     last_connect_error_ =
         "authentication failed: " + std::string(ssh_get_error(session_));
     ssh_disconnect(session_);
     ssh_free(session_);
     session_ = nullptr;
-    return false;
+    return ConnectResult::Failed;
   }
 
   last_connect_error_.clear();
-  ssh_set_blocking(session_, 0);
-  return true;
+  return ConnectResult::Connected;  // session already nonblocking
 }
 
 void TunnelWorker::run_connected() {
-  const int session_fd = ssh_get_fd(session_);
+  // Drive the SSH socket via libssh's event loop instead of polling the raw
+  // session fd ourselves. ssh_event reads incoming packets into the channel
+  // buffers and flushes the out-buffer, so the session stays serviced even
+  // when no forwarder happens to be in a read/write/open state.
+  ssh_event event = ssh_event_new();
+  if (!event || ssh_event_add_session(event, session_) != SSH_OK) {
+    if (event) {
+      ssh_event_free(event);
+    }
+    return;  // treat as a lost connection; run() will reconnect
+  }
+
   std::vector<Forwarder> forwards;
 
   while (!stop_requested_.load()) {
@@ -213,39 +299,33 @@ void TunnelWorker::run_connected() {
       break;
     }
 
-    // Build the poll fd set.
+    // 1) Service the session (nonblocking). SSH_AGAIN means "nothing to do"
+    //    and is normal; SSH_ERROR means the connection is dead.
+    if (ssh_event_dopoll(event, 0) == SSH_ERROR) {
+      break;
+    }
+
+    // 2) Poll our own fds only: stop pipe, listener, local sockets.
+    //    The session fd is deliberately absent — ssh_event owns it now.
     std::vector<pollfd> pfds;
-    pfds.reserve(forwards.size() + 3);
+    pfds.reserve(forwards.size() + 2);
     pfds.push_back(pollfd{stop_pipe_[0], POLLIN, 0});
     pfds.push_back(pollfd{listener_fd_, POLLIN, 0});
-
-    // Session socket: always wait for incoming packets/confirmations; add
-    // POLLOUT only when libssh actually has bytes to flush (out_buffer) or we
-    // have queued app data (to_remote). Use ssh_get_status() (buffer state),
-    // not ssh_get_poll_flags() (stale event registration under our own poll()).
-    short sess_ev = POLLIN;
-    if (ssh_get_status(session_) & SSH_WRITE_PENDING) {
-      sess_ev |= POLLOUT;
-    }
     for (auto& f : forwards) {
       short ev = POLLIN;
       if (!f.to_local.empty()) ev |= POLLOUT;
-      if (!f.to_remote.empty()) sess_ev |= POLLOUT;
       pfds.push_back(pollfd{f.fd, ev, 0});
     }
-    pfds.push_back(pollfd{session_fd, sess_ev, 0});
-    const std::size_t sess_i = pfds.size() - 1;
 
-    const int timeout_ms = 1000;
-
-    const int rc = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), timeout_ms);
+    // Short timeout so we loop back to ssh_event_dopoll frequently even when
+    // only the server has data. Also caps stop() latency at ~100ms.
+    const int rc = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), 100);
     if (rc < 0) {
       if (errno == EINTR) continue;
       break;
     }
 
-    if (pfds[0].revents & (POLLIN | POLLHUP | POLLERR)) break;         // stop
-    if (pfds[sess_i].revents & (POLLERR | POLLHUP | POLLNVAL)) break;  // lost
+    if (pfds[0].revents & (POLLIN | POLLHUP | POLLERR)) break;  // stop
 
     // Accept new local connections (only while connected).
     if (pfds[1].revents & POLLIN) {
@@ -344,26 +424,36 @@ void TunnelWorker::run_connected() {
                 }
                 // Kind::Connect
                 f.in.erase(0, r.consumed);
+                // Preserve any payload the client pipelined right after the
+                // CONNECT request; queue it for the channel (flushed once
+                // open) instead of dropping it.
+                if (!f.in.empty()) {
+                  f.to_remote.append(f.in);
+                  f.in.clear();
+                }
                 f.target_host = r.host;
                 f.target_port = r.port;
                 f.ch = ssh_channel_new(session_);
+                if (!f.ch) {
+                  f.to_local += fail_reply();
+                  f.dead = true;
+                  break;
+                }
                 f.state = Forwarder::State::Opening;
                 // Initiate the open immediately (step 1 already ran for this
                 // forwarder this iteration) so the request goes out without
                 // waiting a full poll cycle.
-                if (f.ch) {
-                  const int o = ssh_channel_open_forward(
-                      f.ch, f.target_host.c_str(), f.target_port, "127.0.0.1",
-                      settings_.local_port);
-                  if (o == SSH_OK) {
-                    f.to_local += success_reply();
-                    f.state = Forwarder::State::Stream;
-                  } else if (o == SSH_ERROR) {
-                    f.to_local += fail_reply();
-                    f.dead = true;
-                  }
-                  // SSH_AGAIN: request in flight; step 1 retries next time.
+                const int o = ssh_channel_open_forward(
+                    f.ch, f.target_host.c_str(), f.target_port, "127.0.0.1",
+                    settings_.local_port);
+                if (o == SSH_OK) {
+                  f.to_local += success_reply();
+                  f.state = Forwarder::State::Stream;
+                } else if (o == SSH_ERROR) {
+                  f.to_local += fail_reply();
+                  f.dead = true;
                 }
+                // SSH_AGAIN: request in flight; step 1 retries next time.
                 break;
               }
             }
@@ -407,6 +497,9 @@ void TunnelWorker::run_connected() {
 
     publish_stats(forwards.size());
   }
+
+  ssh_event_remove_session(event, session_);
+  ssh_event_free(event);
 
   for (auto& f : forwards) close_forwarder(f);
   forwards.clear();
@@ -518,7 +611,9 @@ void TunnelWorker::run() {
 
   while (!stop_requested_.load()) {
     set_status(TunnelStatus::Connecting);
-    if (connect_and_auth()) {
+    const ConnectResult cr = connect_and_auth();
+
+    if (cr == ConnectResult::Connected) {
       reconnect_attempt_ = 0;
       connected_ = true;
       ping_cv_.notify_all();
@@ -537,6 +632,8 @@ void TunnelWorker::run() {
       }
       if (stop_requested_.load()) break;
       set_status(TunnelStatus::Reconnecting, "connection lost, reconnecting");
+    } else if (cr == ConnectResult::Stopped) {
+      break;  // no spurious reconnect counter / status
     } else {
       // A connect attempt failed (initial or reconnect). Count it, and give up
       // once the configured limit is reached.
