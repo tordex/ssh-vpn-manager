@@ -44,6 +44,8 @@ struct TunnelSettings {
   int ping_interval_sec = 10;
   int connect_timeout_sec = 10;
   int max_reconnect_attempts = 5;  // 0 = keep retrying forever
+  int server_alive_interval = 0;   // seconds; 0 = disabled
+  int server_alive_count_max = 3;  // silent intervals before disconnect
 };
 
 // One background thread per running tunnel. Owns the libssh session, a loopback
@@ -108,4 +110,8 @@ private:
   int max_reconnect_attempts_ = 0;
   std::string last_connect_error_;  // worker-thread only (no mutex)
   std::chrono::steady_clock::time_point last_notify_{};
+
+  // ServerAlive keepalive state — worker-thread only (run_connected owns it).
+  std::chrono::steady_clock::time_point last_incoming_{};
+  std::chrono::steady_clock::time_point last_keepalive_{};
 };

@@ -333,6 +333,20 @@ public:
     ping_interval_->set_increments(1, 10);
     ping_interval_->set_value(existing ? existing->ping_interval_sec : 10);
 
+    server_alive_interval_ = Gtk::make_managed<Gtk::SpinButton>();
+    server_alive_interval_->set_range(0, 86400);
+    server_alive_interval_->set_increments(1, 10);
+    server_alive_interval_->set_value(existing ? existing->server_alive_interval : 0);
+    server_alive_interval_->set_tooltip_text(
+        "Send a keepalive after this many idle seconds (0 = disabled).");
+
+    server_alive_count_max_ = Gtk::make_managed<Gtk::SpinButton>();
+    server_alive_count_max_->set_range(1, 999);
+    server_alive_count_max_->set_increments(1, 1);
+    server_alive_count_max_->set_value(existing ? existing->server_alive_count_max : 3);
+    server_alive_count_max_->set_tooltip_text(
+        "Disconnect after this many unanswered keepalives.");
+
     autostart_ = Gtk::make_managed<Gtk::CheckButton>("Run on startup");
     autostart_->set_active(existing ? existing->run_on_startup : false);
 
@@ -350,7 +364,9 @@ public:
     grid_row(*grid, 4, "Ping host", *ping_host_);
     grid_row(*grid, 5, "Ping port", *ping_port_);
     grid_row(*grid, 6, "Ping interval (s)", *ping_interval_);
-    grid->attach(*autostart_, 1, 7, 1, 1);
+    grid_row(*grid, 7, "Server alive interval (s)", *server_alive_interval_);
+    grid_row(*grid, 8, "Server alive count max", *server_alive_count_max_);
+    grid->attach(*autostart_, 1, 9, 1, 1);
     box->append(*grid);
 
     error_ = make_error_label();
@@ -390,6 +406,8 @@ private:
     t.ping_interval_sec = ping_interval_->get_value_as_int();
     t.connect_timeout_sec = timeout_->get_value_as_int();
     t.max_reconnect_attempts = reconnect_->get_value_as_int();
+    t.server_alive_interval = server_alive_interval_->get_value_as_int();
+    t.server_alive_count_max = server_alive_count_max_->get_value_as_int();
     t.run_on_startup = autostart_->get_active();
 
     signal_saved.emit(std::move(t));
@@ -403,6 +421,8 @@ private:
   Gtk::Entry* ping_host_;
   Gtk::SpinButton* ping_port_;
   Gtk::SpinButton* ping_interval_;
+  Gtk::SpinButton* server_alive_interval_;
+  Gtk::SpinButton* server_alive_count_max_;
   Gtk::CheckButton* autostart_;
   Gtk::Label* error_;
   std::string id_;

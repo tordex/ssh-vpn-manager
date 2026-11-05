@@ -64,12 +64,18 @@ Dependencies (pkg-config): `gtkmm-4.0`, `libadwaita-1`, `libssh`, `libsecret-1`,
   It is defined before any include in that file.
 - libssh >= 0.10: `SSH_OPTIONS_PORT` takes `unsigned int`, `SSH_OPTIONS_TIMEOUT`
   takes `long`.
+- libssh has no built-in `ServerAlive*` option. Keepalive is done manually in
+  `run_connected()` via `ssh_send_keepalive()` (from `libssh/server.h`; it sends
+  `keepalive@openssh.com` with want_reply and is nonblocking on a nonblocking
+  session). libssh's nonblocking global-request is a single-slot state machine,
+  so `ssh_send_keepalive()` is called twice per interval to guarantee a send.
 
 ## Config & secrets format (do not break)
 
 - Config keys match `Model::load` exactly: `servers[]` (id/name/host/port/login/
   ping_host/ping_port) and `tunnels[]` (id/local_port/server_id/ping_host/
-  ping_port/ping_interval_sec/connect_timeout_sec/run_on_startup). Missing file
+  ping_port/ping_interval_sec/connect_timeout_sec/max_reconnect_attempts/
+  server_alive_interval/server_alive_count_max/run_on_startup). Missing file
   → empty model is valid.
 - Passwords use the real libsecret schema, keyed by server `id`. `secret-tool`
   with `schema <name>` stores under the *Generic* schema (name as an attribute),

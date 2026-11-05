@@ -27,6 +27,8 @@ struct Tunnel {
   int ping_interval_sec = 10;
   int connect_timeout_sec = 10;
   int max_reconnect_attempts = 5;  // 0 = keep retrying forever
+  int server_alive_interval = 0;   // seconds; 0 = disabled
+  int server_alive_count_max = 3;  // silent intervals before disconnect
   bool run_on_startup = false;
 };
 

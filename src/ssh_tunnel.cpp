@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 #include <curl/curl.h>
 #include <fcntl.h>
+#include <libssh/server.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -294,7 +295,42 @@ void TunnelWorker::run_connected() {
 
   std::vector<Forwarder> forwards;
 
+  // ServerAlive keepalive bookkeeping (reset per connection).
+  last_incoming_ = std::chrono::steady_clock::now();
+  last_keepalive_ = std::chrono::steady_clock::now();
+
   while (!stop_requested_.load()) {
+    // ServerAlive keepalive: when the connection has been idle (no inbound
+    // data) for `server_alive_interval`, send a keepalive; disconnect after
+    // `server_alive_count_max` consecutive silent intervals.
+    if (settings_.server_alive_interval > 0) {
+      const auto now = std::chrono::steady_clock::now();
+
+      // Detect inbound data before ssh_event_dopoll drains the socket. Only
+      // inbound data sets SSH_READ_PENDING, so our own keepalive flush (a
+      // write) never counts as liveness.
+      if (ssh_get_status(session_) & SSH_READ_PENDING) {
+        last_incoming_ = now;
+      }
+
+      const auto interval =
+          std::chrono::seconds(settings_.server_alive_interval);
+      if (now - last_incoming_ >= interval) {
+        // Probe once per interval. libssh's nonblocking global request is a
+        // single-slot state machine, so the first call may only consume the
+        // previous reply; call twice to guarantee one keepalive is sent.
+        if (now - last_keepalive_ >= interval) {
+          ssh_send_keepalive(session_);
+          ssh_send_keepalive(session_);
+          last_keepalive_ = now;
+        }
+        if (settings_.server_alive_count_max > 0 &&
+            (now - last_incoming_) / interval >= settings_.server_alive_count_max) {
+          break;  // treat as lost connection; run() will reconnect
+        }
+      }
+    }
+
     if (ssh_is_connected(session_) == 0) {
       break;
     }

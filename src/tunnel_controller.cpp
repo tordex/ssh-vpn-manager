@@ -71,6 +71,8 @@ std::string TunnelController::start(const std::string& tunnel_id) {
   set.ping_interval_sec = t->ping_interval_sec;
   set.connect_timeout_sec = t->connect_timeout_sec;
   set.max_reconnect_attempts = t->max_reconnect_attempts;
+  set.server_alive_interval = t->server_alive_interval;
+  set.server_alive_count_max = t->server_alive_count_max;
 
   auto entry = std::make_unique<Entry>();
   entry->dispatcher = std::make_unique<Glib::Dispatcher>();
