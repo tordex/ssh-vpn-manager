@@ -32,6 +32,7 @@ class Window : public Gtk::ApplicationWindow
     void on_add_server();
     void on_add_tunnel();
     void on_check_servers();
+    void on_settings();
     void on_check_server(const std::string& id);
     void on_toggle_tunnel(const std::string& id);
     void on_route_tunnel(const std::string& id);

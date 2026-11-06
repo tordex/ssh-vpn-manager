@@ -477,6 +477,81 @@ namespace
         std::vector<std::string> server_ids_;
     };
 
+    // --- Settings dialog --------------------------------------------------------
+
+    class SettingsDialog : public Gtk::Window
+    {
+      public:
+        SettingsDialog(Gtk::Window& parent, const Model& model)
+        {
+            set_modal(true);
+            set_transient_for(parent);
+            set_title("Settings");
+            set_default_size(560, -1);
+
+            auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
+            box->set_margin(16);
+            set_child(*box);
+
+            on_cmd_  = make_command_editor(*box, "Command to run after routing starts");
+            off_cmd_ = make_command_editor(*box, "Command to run after routing stops");
+
+            auto* hint = Gtk::make_managed<Gtk::Label>();
+            hint->set_markup("<span size='small' color='#9a9996'>Leave a command empty to skip it.</span>");
+            hint->set_xalign(0.0f);
+            box->append(*hint);
+
+            auto* btns = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+            btns->set_halign(Gtk::Align::END);
+            auto* cancel = Gtk::make_managed<Gtk::Button>("Cancel");
+            auto* save   = Gtk::make_managed<Gtk::Button>("Save");
+            save->add_css_class("suggested-action");
+            cancel->signal_clicked().connect([this] { close(); });
+            save->signal_clicked().connect([this] { on_save(); });
+            btns->append(*cancel);
+            btns->append(*save);
+            box->append(*btns);
+
+            on_cmd_->get_buffer()->set_text(model.route_on_command);
+            off_cmd_->get_buffer()->set_text(model.route_off_command);
+        }
+
+        sigc::signal<void(std::string, std::string)> signal_saved;
+
+      private:
+        Gtk::TextView* make_command_editor(Gtk::Box& box, const char* label)
+        {
+            auto* l = Gtk::make_managed<Gtk::Label>(label);
+            l->set_halign(Gtk::Align::START);
+            l->set_xalign(0.0f);
+            box.append(*l);
+
+            auto* tv = Gtk::make_managed<Gtk::TextView>();
+            tv->set_monospace(true);
+            tv->set_wrap_mode(Gtk::WrapMode::WORD_CHAR);
+            tv->set_left_margin(8);
+            tv->set_top_margin(6);
+            tv->set_bottom_margin(6);
+
+            auto* sw = Gtk::make_managed<Gtk::ScrolledWindow>();
+            sw->set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC);
+            sw->set_min_content_height(80);
+            sw->set_child(*tv);
+            box.append(*sw);
+
+            return tv;
+        }
+
+        void on_save()
+        {
+            signal_saved.emit(on_cmd_->get_buffer()->get_text(), off_cmd_->get_buffer()->get_text());
+            close();
+        }
+
+        Gtk::TextView* on_cmd_;
+        Gtk::TextView* off_cmd_;
+    };
+
 } // namespace
 
 Window::Window(Model& model, SecretStore& secrets, TunnelController& controller, SingboxController& singbox, Log& log) :
@@ -534,6 +609,10 @@ void Window::build_ui()
     check_btn_ = make_icon_button("Check servers", "view-refresh-symbolic");
     check_btn_->signal_clicked().connect([this] { on_check_servers(); });
     hb->pack_start(*check_btn_);
+
+    auto* settings = make_icon_button("Settings", "preferences-system-symbolic");
+    settings->signal_clicked().connect([this] { on_settings(); });
+    hb->pack_end(*settings);
 
     auto* quit = Gtk::make_managed<Gtk::Button>("Quit");
     quit->signal_clicked().connect([this] {
@@ -878,6 +957,18 @@ void Window::refresh_log()
     auto end = log_buffer_->end();
     log_buffer_->place_cursor(end);
     log_view_->scroll_to(end);
+}
+
+void Window::on_settings()
+{
+    auto* dlg = new SettingsDialog(*this, model_);
+    dlg->signal_saved.connect([this](std::string on_cmd, std::string off_cmd) {
+        model_.route_on_command  = std::move(on_cmd);
+        model_.route_off_command = std::move(off_cmd);
+        model_.save();
+    });
+    dlg->signal_hide().connect([dlg] { delete dlg; });
+    dlg->present();
 }
 
 void Window::on_add_server()

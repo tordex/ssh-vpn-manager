@@ -9,6 +9,7 @@
 
 #include <arpa/inet.h>
 #include <glib.h>
+#include <glibmm/main.h>
 #include <netdb.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -22,6 +23,9 @@ using nlohmann::json;
 
 namespace
 {
+    // Delay between sing-box starting and the route_on_command hook, giving the
+    // TUN interface time to come up before the hook runs.
+    constexpr int kActivateHookDelayMs = 1000;
 
     bool is_ip_literal(const std::string& host)
     {
@@ -159,6 +163,7 @@ SingboxController::SingboxController(Model& model, Log& log) :
         }
         if(unexpected)
         {
+            ++generation_; // cancel any pending on-activate hook
             std::string msg = "sing-box exited unexpectedly";
             if(WIFEXITED(status))
             {
@@ -173,6 +178,7 @@ SingboxController::SingboxController(Model& model, Log& log) :
                 msg += " — " + detail;
             }
             log_.append(msg);
+            run_hook(model_.route_off_command, "stop");
         }
         active_tunnel_id_.clear();
         signal_changed.emit();
@@ -353,6 +359,16 @@ std::string SingboxController::start(const std::string& tunnel_id)
     stop_requested_.store(false);
     watch_thread_ = std::thread(&SingboxController::watch_run, this);
 
+    const int gen = ++generation_;
+    Glib::signal_timeout().connect_once(
+        [this, gen] {
+            if(gen == generation_)
+            {
+                run_hook(model_.route_on_command, "start");
+            }
+        },
+        kActivateHookDelayMs);
+
     log_.append("sing-box: routing all traffic through tunnel 127.0.0.1:" + std::to_string(t->local_port));
     signal_changed.emit();
     return "";
@@ -360,9 +376,12 @@ std::string SingboxController::start(const std::string& tunnel_id)
 
 void SingboxController::stop()
 {
-    stop_requested_.store(true);
+    const pid_t pid         = pid_.load();
+    const bool  was_running = pid > 0;
 
-    const pid_t pid = pid_.load();
+    stop_requested_.store(true);
+    ++generation_; // cancel any pending on-activate hook
+
     if(pid > 0)
     {
         ssh_runner::terminate(pid);
@@ -375,7 +394,58 @@ void SingboxController::stop()
     }
 
     active_tunnel_id_.clear();
+    if(was_running)
+    {
+        run_hook(model_.route_off_command, "stop");
+    }
     signal_changed.emit();
+}
+
+void SingboxController::run_hook(const std::string& command, const char* what)
+{
+    if(command.empty())
+    {
+        return;
+    }
+
+    log_.append(std::string("sing-box: running ") + what + " hook");
+
+    int         stderr_fd = -1;
+    const pid_t pid       = singbox_runner::spawn({"/bin/sh", "-c", command}, &stderr_fd);
+    if(pid < 0)
+    {
+        log_.append(std::string("sing-box: failed to run ") + what + " hook: " + std::strerror(errno));
+        return;
+    }
+
+    std::string out;
+    int         status = 0;
+    for(;;)
+    {
+        ssh_runner::read_stderr(stderr_fd, out);
+        const pid_t r = waitpid(pid, &status, 0);
+        if(r == pid)
+        {
+            break;
+        }
+        if(r < 0 && errno != EINTR)
+        {
+            break;
+        }
+    }
+    ssh_runner::read_stderr(stderr_fd, out);
+    close(stderr_fd);
+
+    if(!(WIFEXITED(status) && WEXITSTATUS(status) == 0))
+    {
+        std::string       msg    = std::string("sing-box: ") + what + " hook failed";
+        const std::string detail = last_nonempty_line(out);
+        if(!detail.empty())
+        {
+            msg += " — " + detail;
+        }
+        log_.append(msg);
+    }
 }
 
 void SingboxController::watch_run()

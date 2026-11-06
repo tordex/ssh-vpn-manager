@@ -42,6 +42,10 @@ class Model
     std::vector<Server> servers;
     std::vector<Tunnel> tunnels;
 
+    // Shell commands run as hooks around sing-box traffic routing (empty = none).
+    std::string route_on_command;  // after routing starts
+    std::string route_off_command; // after routing stops
+
     bool load(std::string* error = nullptr);
     bool save(std::string* error = nullptr) const;
 

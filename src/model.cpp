@@ -82,6 +82,11 @@ bool Model::load(std::string* error)
                 }
             }
         }
+        if(j.contains("settings") && j["settings"].is_object())
+        {
+            route_on_command  = j["settings"].value("route_on_command", "");
+            route_off_command = j["settings"].value("route_off_command", "");
+        }
     }
     catch(const std::exception& e)
     {
@@ -127,6 +132,10 @@ bool Model::save(std::string* error) const
             {"run_on_startup",         t.run_on_startup        }
         });
     }
+    j["settings"] = {
+        {"route_on_command",  route_on_command },
+        {"route_off_command", route_off_command}
+    };
 
     try
     {

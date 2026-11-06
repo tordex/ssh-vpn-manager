@@ -82,10 +82,11 @@ Requires the OpenSSH `ssh` client binary at runtime (tunnels run `ssh -N -D`).
 ## Config & secrets format (do not break)
 
 - Config keys match `Model::load` exactly: `servers[]` (id/name/host/port/login/
-  ping_host/ping_port) and `tunnels[]` (id/local_port/server_id/ping_host/
+  ping_host/ping_port), `tunnels[]` (id/local_port/server_id/ping_host/
   ping_port/ping_interval_sec/connect_timeout_sec/max_reconnect_attempts/
-  server_alive_interval/server_alive_count_max/run_on_startup). Missing file
-  → empty model is valid.
+  server_alive_interval/server_alive_count_max/run_on_startup), and a `settings`
+  object (`route_on_command`/`route_off_command` — shell hooks run around
+  sing-box routing). Missing file → empty model is valid.
 - Passwords use the real libsecret schema, keyed by server `id`. `secret-tool`
   with `schema <name>` stores under the *Generic* schema (name as an attribute),
   which is NOT what this app reads — use `SecretStore` to inspect/populate.

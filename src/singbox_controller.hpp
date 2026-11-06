@@ -36,6 +36,7 @@ class SingboxController
     std::string        generate_config(const Tunnel& t, std::string* err) const;
     static std::string config_path();
     void               watch_run();
+    void               run_hook(const std::string& command, const char* what);
 
     Model& model_;
     Log&   log_;
@@ -48,6 +49,10 @@ class SingboxController
     std::thread        watch_thread_;
 
     std::string active_tunnel_id_;
+
+    // Monotonic route generation, bumped on every start/stop/unexpected exit so a
+    // delayed on-activate hook can detect that the route changed beneath it.
+    int generation_ = 0;
 
     // Child-exit reporting from the watcher thread to the main thread.
     std::mutex  mutex_;
