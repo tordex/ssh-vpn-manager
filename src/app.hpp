@@ -7,6 +7,7 @@
 #include "log.hpp"
 #include "model.hpp"
 #include "secret_store.hpp"
+#include "singbox_controller.hpp"
 #include "tray.hpp"
 #include "tunnel_controller.hpp"
 
@@ -33,12 +34,13 @@ class App : public Gtk::Application
     void show_window();
     void start_autostart_tunnels();
 
-    Model                             model_;
-    SecretStore                       secrets_;
-    Log                               log_{Log::default_file_path()};
-    std::unique_ptr<TunnelController> controller_;
-    std::unique_ptr<TrayIcon>         tray_;
-    Window*                           window_         = nullptr; // owned by Gtk::Application
-    bool                              autostart_done_ = false;
-    bool                              hidden_         = false;
+    Model                              model_;
+    SecretStore                        secrets_;
+    Log                                log_{Log::default_file_path()};
+    std::unique_ptr<TunnelController>  controller_;
+    std::unique_ptr<SingboxController> singbox_;
+    std::unique_ptr<TrayIcon>          tray_;
+    Window*                            window_         = nullptr; // owned by Gtk::Application
+    bool                               autostart_done_ = false;
+    bool                               hidden_         = false;
 };

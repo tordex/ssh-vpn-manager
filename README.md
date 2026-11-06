@@ -19,6 +19,7 @@ A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 - Ping latency (RTT) to a configured host, measured through the tunnel.
 - Transferred byte counters (Tx / Rx, approximate — see Notes).
 - "Run on startup" flag per tunnel (starts the tunnel when the app launches).
+- **Route all traffic** through a tunnel via sing-box (system-wide TUN; see below).
 - Closing the window hides it to a system tray icon; the tray icon restores it.
 - Hidden mode: start with no window (tray only) via `--hidden`, so tunnels marked
   "run on startup" come up silently at login.
@@ -30,6 +31,7 @@ A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 | GTK4 (gtkmm) | UI | `gtkmm-4.0` |
 | libadwaita | Adwaita look & behaviour | `libadwaita-1` |
 | OpenSSH client | SSH transport (`ssh` binary) | — |
+| sing-box (optional) | system-wide traffic routing | — |
 | libsecret | encrypted password storage | `libsecret-1` |
 | nlohmann/json | config serialization | `nlohmann_json` |
 | ayatana-appindicator-glib (optional) | system tray | `ayatana-appindicator-glib` |
@@ -85,6 +87,28 @@ is detected automatically at configure time. If it is not installed, the app
 still builds and runs: closing the window hides it, and launching the app again
 re-shows it. You can force the behaviour with `meson setup build -Dtray=enabled`
 or `-Dtray=disabled`.
+
+### Route all traffic (sing-box)
+
+Each tunnel row has a **Route** button that routes *all* system traffic through
+that tunnel using [sing-box](https://sing-box.sagernet.org/) with a TUN
+interface. Clicking it generates a sing-box config, validates it with
+`sing-box check`, and runs `sing-box run`. Clicking the same tunnel again (or
+another tunnel's Route button) stops the current sing-box instance.
+
+The generated config routes every server that has a tunnel **directly** (so the
+tunnels' own SSH connections never loop back through the TUN), keeps local /
+private ranges direct, and sends everything else through the tunnel's SOCKS5
+listener.
+
+The TUN interface needs `CAP_NET_ADMIN`. Grant it to the sing-box binary once:
+
+```sh
+sudo setcap cap_net_admin,cap_net_raw+ep "$(command -v sing-box)"
+```
+
+Without this, starting a route fails with a permission error.
+
 
 ## Configuration & data
 

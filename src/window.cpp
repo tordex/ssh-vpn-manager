@@ -479,10 +479,11 @@ namespace
 
 } // namespace
 
-Window::Window(Model& model, SecretStore& secrets, TunnelController& controller, Log& log) :
+Window::Window(Model& model, SecretStore& secrets, TunnelController& controller, SingboxController& singbox, Log& log) :
     model_(model),
     secrets_(secrets),
     controller_(controller),
+    singbox_(singbox),
     log_(log),
     server_checker_(model, secrets)
 {
@@ -492,6 +493,13 @@ Window::Window(Model& model, SecretStore& secrets, TunnelController& controller,
     refresh_log();
 
     controller_.signal_changed.connect([this](const std::string& id) { refresh_tunnel_row(id); });
+    singbox_.signal_changed.connect([this] {
+        for(const auto& [id, rw] : tunnel_rows_)
+        {
+            (void) rw;
+            refresh_tunnel_row(id);
+        }
+    });
     log_.signal_changed.connect([this] { refresh_log(); });
     server_checker_.signal_changed.connect([this](const std::string& id) {
         refresh_server_row(id);
@@ -672,6 +680,10 @@ void Window::rebuild_tunnels()
         rw.toggle->set_icon_name("media-playback-start-symbolic");
         rw.toggle->set_tooltip_text("Run");
 
+        rw.route = Gtk::make_managed<Gtk::Button>();
+        rw.route->set_icon_name("network-vpn-symbolic");
+        rw.route->set_tooltip_text("Route all traffic through this tunnel");
+
         auto* edit = Gtk::make_managed<Gtk::Button>();
         edit->set_icon_name("document-edit-symbolic");
         edit->set_tooltip_text("Edit");
@@ -682,11 +694,13 @@ void Window::rebuild_tunnels()
         del->add_css_class("destructive-action");
 
         row->append(*rw.toggle);
+        row->append(*rw.route);
         row->append(*edit);
         row->append(*del);
 
         const std::string id = t.id;
         rw.toggle->signal_clicked().connect([this, id] { on_toggle_tunnel(id); });
+        rw.route->signal_clicked().connect([this, id] { on_route_tunnel(id); });
         edit->signal_clicked().connect([this, id] { on_edit_tunnel(id); });
         del->signal_clicked().connect([this, id] { on_delete_tunnel(id); });
 
@@ -795,6 +809,17 @@ void Window::refresh_tunnel_row(const std::string& id)
     const bool running = controller_.is_running(id);
     it->second.toggle->set_icon_name(running ? "media-playback-stop-symbolic" : "media-playback-start-symbolic");
     it->second.toggle->set_tooltip_text(running ? "Stop" : "Run");
+
+    const bool routing = singbox_.active_tunnel_id() == id;
+    if(routing)
+    {
+        it->second.route->add_css_class("suggested-action");
+        it->second.route->set_tooltip_text("Stop routing all traffic");
+    } else
+    {
+        it->second.route->remove_css_class("suggested-action");
+        it->second.route->set_tooltip_text("Route all traffic through this tunnel");
+    }
 }
 
 void Window::refresh_server_row(const std::string& id)
@@ -1013,6 +1038,10 @@ void Window::on_edit_tunnel(const std::string& id)
 void Window::on_delete_tunnel(const std::string& id)
 {
     controller_.stop(id);
+    if(singbox_.active_tunnel_id() == id)
+    {
+        singbox_.stop();
+    }
     model_.remove_tunnel(id);
     model_.save();
     rebuild_tunnels();
@@ -1032,6 +1061,32 @@ void Window::on_toggle_tunnel(const std::string& id)
         }
     }
     refresh_tunnel_row(id);
+}
+
+void Window::on_route_tunnel(const std::string& id)
+{
+    if(singbox_.active_tunnel_id() == id)
+    {
+        singbox_.stop();
+        return;
+    }
+
+    // Routing needs the tunnel's SOCKS port listening; auto-start it if needed.
+    if(!controller_.is_running(id))
+    {
+        const std::string err = controller_.start(id);
+        if(!err.empty())
+        {
+            show_error(err);
+            return;
+        }
+    }
+
+    const std::string err = singbox_.start(id);
+    if(!err.empty())
+    {
+        show_error(err);
+    }
 }
 
 void Window::show_error(const Glib::ustring& message)

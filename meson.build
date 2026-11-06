@@ -30,6 +30,8 @@ sources = files(
   'src/ssh_runner.cpp',
   'src/ssh_tunnel.cpp',
   'src/tunnel_controller.cpp',
+  'src/singbox_runner.cpp',
+  'src/singbox_controller.cpp',
   'src/log.cpp',
   'src/tray.cpp',
 )

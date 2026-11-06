@@ -30,6 +30,7 @@ void App::on_startup()
     }
 
     controller_ = std::make_unique<TunnelController>(model_, secrets_, log_);
+    singbox_    = std::make_unique<SingboxController>(model_, log_);
 
     tray_ = std::make_unique<TrayIcon>([this] { show_window(); }, [this] { quit_requested(); });
 }
@@ -63,6 +64,10 @@ int App::on_handle_local_options(const Glib::RefPtr<Glib::VariantDict>& options)
 
 void App::on_shutdown()
 {
+    if(singbox_)
+    {
+        singbox_->stop();
+    }
     if(controller_)
     {
         controller_->stop_all();
@@ -78,7 +83,7 @@ void App::create_window()
     {
         return;
     }
-    window_ = new Window(model_, secrets_, *controller_, log_);
+    window_ = new Window(model_, secrets_, *controller_, *singbox_, log_);
     add_window(*window_);
 }
 
