@@ -3,6 +3,10 @@
 A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 (SOCKS5-over-SSH) tunnels on Linux. Written in C++17.
 
+## Screenshot
+
+![Main window](data/screenshots/main-window.png)
+
 ## Features
 
 - Maintains a list of SSH servers (name, host/IP, port, login, password).
