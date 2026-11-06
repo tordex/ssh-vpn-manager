@@ -34,6 +34,15 @@ sources = files(
   'src/tray.cpp',
 )
 
+# Reformat the sources with clang-format before building:
+#   ninja -C build format
+# `format` runs clang-format -i on every source/header file in `sources`.
+clang_format = find_program('clang-format', required: false)
+if clang_format.found()
+  run_target('format',
+    command: [clang_format, '-i', sources])
+endif
+
 executable('ssh-vpn-manager', sources,
   dependencies: deps,
   install: true)
