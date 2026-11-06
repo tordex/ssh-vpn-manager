@@ -5,13 +5,12 @@ project('ssh-vpn-manager', 'cpp',
 
 gtkmm     = dependency('gtkmm-4.0')
 adwaita   = dependency('libadwaita-1')
-libssh    = dependency('libssh')
 libsecret = dependency('libsecret-1')
 libcurl   = dependency('libcurl')
 nlohmann  = dependency('nlohmann_json')
 threads   = dependency('threads')
 
-deps = [gtkmm, adwaita, libssh, libsecret, libcurl, nlohmann, threads]
+deps = [gtkmm, adwaita, libsecret, libcurl, nlohmann, threads]
 
 # System tray via StatusNotifierItem. Optional: the app still works without it
 # (closing hides the window, launching the app again re-shows it).
@@ -28,8 +27,8 @@ sources = files(
   'src/model.cpp',
   'src/secret_store.cpp',
   'src/server_checker.cpp',
+  'src/ssh_runner.cpp',
   'src/ssh_tunnel.cpp',
-  'src/socks5.cpp',
   'src/tunnel_controller.cpp',
   'src/log.cpp',
   'src/tray.cpp',
@@ -38,11 +37,6 @@ sources = files(
 executable('ssh-vpn-manager', sources,
   dependencies: deps,
   install: true)
-
-socks5_test = executable('socks5_test',
-  ['src/socks5.cpp', 'tests/socks5_test.cpp'],
-  dependencies: threads)
-test('socks5', socks5_test)
 
 
 install_data('data/org.sshvpnmanager.SshVpnManager.desktop',

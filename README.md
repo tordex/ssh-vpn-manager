@@ -17,7 +17,7 @@ A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 - Automatic reconnect with exponential backoff when the SSH connection drops.
 - Live status (stopped / connecting / connected / reconnecting / error).
 - Ping latency (RTT) to a configured host, measured through the tunnel.
-- Transferred byte counters (Tx / Rx).
+- Transferred byte counters (Tx / Rx, approximate — see Notes).
 - "Run on startup" flag per tunnel (starts the tunnel when the app launches).
 - Closing the window hides it to a system tray icon; the tray icon restores it.
 - Hidden mode: start with no window (tray only) via `--hidden`, so tunnels marked
@@ -29,7 +29,7 @@ A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 |---|---|---|
 | GTK4 (gtkmm) | UI | `gtkmm-4.0` |
 | libadwaita | Adwaita look & behaviour | `libadwaita-1` |
-| libssh | SSH transport | `libssh` |
+| OpenSSH client | SSH transport (`ssh` binary) | — |
 | libsecret | encrypted password storage | `libsecret-1` |
 | nlohmann/json | config serialization | `nlohmann_json` |
 | ayatana-appindicator-glib (optional) | system tray | `ayatana-appindicator-glib` |
@@ -39,8 +39,10 @@ A GTK4/Adwaita desktop application for managing SSH **dynamic port forwarding**
 ```sh
 meson setup build
 ninja -C build
-meson test -C build     # runs the SOCKS5 handshake unit test
 ```
+
+The `ssh` (OpenSSH) client binary must be installed; tunnels are implemented by
+running `ssh -N -D <port> <login>@<server>` as a supervised child process.
 
 Run:
 
@@ -97,6 +99,9 @@ or `-Dtray=disabled`.
   `ssh -o StrictHostKeyChecking=no`). Treat the SSH servers as trusted.
 - Decrypted passwords are held in memory only while the corresponding tunnel is
   running (needed for reconnects).
+- The Tx / Rx counters are read from `/proc/<pid>/io` for the `ssh` process and
+  therefore include SSH framing and keepalive overhead; they are an approximation
+  of tunneled traffic, not an exact count.
 
 ## License
 
